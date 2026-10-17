@@ -11,7 +11,7 @@
 [CmdletBinding()]
 param([switch]$Simulate)
 
-$script:AppVersion = '3.4'
+$script:AppVersion = '3.5'
 $script:AppDir = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
 $script:ErrorLog = Join-Path $script:AppDir 'WinOptima-error.log'
 
@@ -1175,6 +1175,102 @@ $Engine = {
         Write-Log "Icona «$($Icon.Name)»: $what." 'SUCCESS'
     }
 
+    # ---------------------------------------------------------------- app preinstallate
+    # App dello Store che di solito si rimuovono volentieri (nome pacchetto -> nome leggibile)
+    $BloatApps = [ordered]@{
+        'Microsoft.MicrosoftOfficeHub' = 'Microsoft 365 (Office)'; 'Microsoft.Office.OneNote' = 'OneNote per Windows 10'
+        'Microsoft.BingNews' = 'Notizie'; 'Microsoft.BingWeather' = 'Meteo'; 'Microsoft.BingSearch' = 'Ricerca Bing'
+        'Microsoft.BingFinance' = 'Finanza'; 'Microsoft.BingSports' = 'Sport'; 'Microsoft.GetHelp' = 'Assistenza'
+        'Microsoft.Getstarted' = 'Suggerimenti'; 'Microsoft.MicrosoftSolitaireCollection' = 'Microsoft Solitaire Collection'
+        'Microsoft.People' = 'Contatti'; 'Microsoft.WindowsFeedbackHub' = 'Hub di Feedback'; 'Microsoft.ZuneVideo' = 'Film e TV'
+        'Microsoft.SkypeApp' = 'Skype'; 'Microsoft.Todos' = 'Microsoft To Do'; 'Microsoft.PowerAutomateDesktop' = 'Power Automate'
+        'Clipchamp.Clipchamp' = 'Clipchamp'; 'Microsoft.549981C3F5F10' = 'Cortana'; 'Microsoft.WindowsMaps' = 'Mappe'
+        'Microsoft.MixedReality.Portal' = 'Portale realtà mista'; 'Microsoft.Microsoft3DViewer' = 'Visualizzatore 3D'
+        'Microsoft.MSPaint' = 'Paint 3D'; 'MicrosoftTeams' = 'Microsoft Teams (personale)'; 'MSTeams' = 'Microsoft Teams'
+        'Microsoft.MicrosoftJournal' = 'Journal'; 'Microsoft.Wallet' = 'Wallet'; 'Microsoft.Messaging' = 'Messaggi'
+        'Microsoft.OneConnect' = 'Piani mobili'; 'Microsoft.Print3D' = 'Stampa 3D'; 'MicrosoftCorporationII.MicrosoftFamily' = 'Microsoft Family'
+        'Microsoft.Windows.DevHome' = 'Dev Home'; 'Microsoft.MicrosoftPCManager' = 'PC Manager'
+    }
+    # App di terze parti installate dai produttori o da Windows come «promozione»
+    $BloatPattern = 'king\.com|Facebook|Instagram|TikTok|Spotify|Disney|PrimeVideo|AmazonVideo|Netflix|LinkedIn|Twitter|' +
+        'CandyCrush|BubbleWitch|MarchofEmpires|Booking|McAfee|Norton|ExpressVPN|Dropbox|WildTangent|HiddenCity|Royal\s?Revolt|' +
+        'Duolingo|PicsArt|Flipboard|ShazamEntertainment|Keeper|Plex|Hulu|CyberLink|Asphalt|FarmVille|Roblox'
+    # Pacchetti da non mostrare mai: componenti di sistema, librerie, codec, driver e utilità hardware
+    $KeepAppPattern = '^Microsoft\.(WindowsStore|DesktopAppInstaller|StorePurchaseApp|Services\.Store|VCLibs|UI\.Xaml|NET\.|' +
+        'WindowsAppRuntime|SecHealthUI|Windows\.|WebpImageExtension|HEIFImageExtension|HEVCVideoExtension|VP9VideoExtensions|' +
+        'AV1VideoExtension|MPEG2VideoExtension|RawImageExtension|WebMediaExtensions|AVCEncoderVideoExtension|' +
+        'ApplicationCompatibilityEnhancements|WidgetsPlatformRuntime|LanguageExperiencePack|Winget|WindowsTerminal|' +
+        'Paint|ScreenSketch|WindowsNotepad|WindowsCalculator|Photos|ImmersiveControlPanel|MicrosoftEdge|Edge\.Stable)|' +
+        '^MicrosoftWindows\.|^Windows\.|^windows\.|NVIDIA|Realtek|RealtekSemiconductor|Intel|AMD|AdvancedMicroDevices|Dolby|DTS|' +
+        'Synaptics|ELAN|Waves|Conexant|Nahimic|AppUp\.|DellInc\.Dell(Optimizer|Power|Display|Digital)|HPAudio|LenovoCorporation\.LenovoVantage'
+
+    function Get-RemovableApps {
+        $names = @{}
+        try { foreach ($s in Get-StartApps) { if ($s.AppID -match '^([^!]+)!') { $names[$Matches[1]] = $s.Name } } } catch {}
+        $seen = @{}
+        foreach ($p in @(Get-AppxPackage -ErrorAction SilentlyContinue | Sort-Object Name)) {
+            if ($p.IsFramework -or $p.NonRemovable -or $p.SignatureKind -eq 'System') { continue }
+            if ($seen.ContainsKey($p.PackageFamilyName)) { continue }
+            if (-not $BloatApps.Contains($p.Name) -and $p.Name -match $KeepAppPattern) { continue }
+            $seen[$p.PackageFamilyName] = $true
+            $display = if ($BloatApps.Contains($p.Name)) { $BloatApps[$p.Name] }
+                elseif ($names[$p.PackageFamilyName]) { $names[$p.PackageFamilyName] }
+                else { ($p.Name -replace '^[^.]+\.', '') -creplace '([a-z])([A-Z])', '$1 $2' }
+            @{
+                Name = $p.Name; FullName = $p.PackageFullName; Family = $p.PackageFamilyName
+                Display = $display; Version = "$($p.Version)"; Publisher = $(if ($p.Publisher -match '^CN="?([^,"]+)' -and $Matches[1] -notmatch '^[0-9A-Fa-f-]{36}$') { $Matches[1] } else { 'editore non indicato' })
+                Rec = ($BloatApps.Contains($p.Name) -or $p.Name -match $BloatPattern)
+            }
+        }
+    }
+
+    function Remove-Apps {
+        param([object[]]$Apps, [bool]$Deprovision)
+        $ok = 0; $fail = 0; $i = 0
+        Write-Log "--- RIMOZIONE DI $($Apps.Count) APP ---"
+        $prov = @()
+        if ($Deprovision -and -not $Sim) { try { $prov = @(Get-AppxProvisionedPackage -Online -ErrorAction Stop) } catch { Write-Log "Elenco dei pacchetti di provisioning non disponibile: $($_.Exception.Message)" 'WARN' } }
+        foreach ($a in $Apps) {
+            Send-Ui 'progress' @{ Value = $i; Max = $Apps.Count; Text = "Rimuovo: $($a.Display)" }
+            $i++
+            if (Test-Sim "rimuove l'app $($a.Display) ($($a.FullName))$(if ($Deprovision) { ' e il pacchetto di provisioning' })") { $ok++; continue }
+            try {
+                Remove-AppxPackage -Package $a.FullName -ErrorAction Stop
+                foreach ($pp in @($prov | Where-Object { $_.DisplayName -eq $a.Name })) {
+                    try { Remove-AppxProvisionedPackage -Online -PackageName $pp.PackageName -ErrorAction Stop | Out-Null; Write-Log "Non verrà reinstallata per i nuovi utenti: $($a.Display)" }
+                    catch { Write-Log "Provisioning di $($a.Display) non rimosso: $($_.Exception.Message)" 'WARN' }
+                }
+                Write-Log "Rimossa: $($a.Display)" 'SUCCESS'; $ok++
+            } catch { Write-Log ("$($a.Display): " + (($_.Exception.Message -split "`r?`n")[0])) 'ERROR'; $fail++ }
+        }
+        Send-Ui 'progress' @{ Value = $Apps.Count; Max = $Apps.Count; Text = 'Completato' }
+        Send-Ui 'summary' @{ Ok = $ok; Fail = $fail; Freed = 0; Sim = $Sim; AppsRemoved = $true }
+    }
+
+    # Programmi desktop tipicamente preinstallati (Office Click-to-Run in più lingue, antivirus in prova…)
+    $PreinstalledProgramPattern = '^Microsoft 365|^Microsoft Office|^Microsoft OneNote|^Microsoft Project|^Microsoft Visio|McAfee|Norton|' +
+        'WildTangent|ExpressVPN|Booking\.com|Dropbox (Promotion|Offer)|Avast Free|AVG|Candy Crush|Spotify'
+    function Get-PreinstalledPrograms {
+        $roots = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall', 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall', 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall'
+        $seen = @{}
+        foreach ($r in $roots) {
+            foreach ($k in @(Get-ChildItem -LiteralPath $r -ErrorAction SilentlyContinue)) {
+                $p = Get-ItemProperty -LiteralPath $k.PSPath -ErrorAction SilentlyContinue
+                if (-not $p.DisplayName -or -not $p.UninstallString -or $p.SystemComponent -eq 1) { continue }
+                if ($p.DisplayName -notmatch $PreinstalledProgramPattern -or $seen.ContainsKey($p.DisplayName)) { continue }
+                $seen[$p.DisplayName] = $true
+                @{ Name = $p.DisplayName; Publisher = $p.Publisher; Version = $p.DisplayVersion; Uninstall = $p.UninstallString
+                    SizeMB = $(if ($p.EstimatedSize) { [math]::Round($p.EstimatedSize / 1024) } else { 0 }) }
+            }
+        }
+    }
+
+    function Send-BloatState {
+        $apps = @(Get-RemovableApps)
+        $progs = @(Get-PreinstalledPrograms)
+        Send-Ui 'bloat' @{ Apps = $apps; Programs = $progs }
+    }
+
     # ---------------------------------------------------------------- aggiornamenti da GitHub
     $UpdateRepo = 'brn78/WinOptima'
 
@@ -1859,7 +1955,7 @@ $WindowXaml = @'
 
 # ---------------------------------------------------------------- impostazioni persistenti
 $script:SettingsPath = Join-Path $script:AppDir 'WinOptima.settings.json'
-$script:Settings = @{ theme = 'system'; simulate = $false; restartExplorer = $true; restorePoint = $false; logOpen = $false; logHeight = 200; autoUpdate = $true }
+$script:Settings = @{ theme = 'system'; simulate = $false; restartExplorer = $true; restorePoint = $false; logOpen = $false; logHeight = 200; autoUpdate = $true; deprovision = $true }
 
 function Read-Settings {
     try {
@@ -2489,6 +2585,12 @@ function Start-DraftPlan {
 
 function Complete-Summary {
     param($Msg)
+    if ($Msg.AppsRemoved) {
+        $sim = if ($Msg.Sim) { ' (simulazione)' } else { '' }
+        if ($Msg.Fail -eq 0) { Show-Info 'success' "App rimosse$sim" "$($Msg.Ok) app rimosse senza errori." ; Set-Status "App rimosse$sim." 'ok' }
+        else { Show-Info 'warning' "Rimozione completata con $($Msg.Fail) errori$sim" "$($Msg.Ok) app rimosse. Dettagli nel registro attività."; Set-Status "Rimozione con $($Msg.Fail) errori." 'warn' }
+        return
+    }
     if ($Msg.Analysis) {
         Show-Info 'info' 'Analisi completata' ('Circa {0} recuperabili con le voci elencate sotto.' -f (Format-Bytes $Msg.Freed))
         Set-Status 'Analisi completata.' 'ok'
@@ -3067,6 +3169,126 @@ function Update-AppsPage {
     }
 }
 
+# ---------------------------------------------------------------- pagina: App preinstallate
+$script:BloatChecks = @()
+
+function Build-BloatPage {
+    $script:BloatPanel = New-Object System.Windows.Controls.StackPanel
+    $refresh = New-Btn 'Aggiorna' '' $null { Update-BloatPage } 0
+    $script:BloatRemoveBtn = New-Btn 'Rimuovi selezionate' 'AccentButton' $null { Request-RemoveApps } 8
+    $script:BloatRemoveBtn.IsEnabled = $false
+    $script:HeaderButtons.bloat = @($refresh, $script:BloatRemoveBtn)
+    $script:BloatPanel
+}
+
+function Update-BloatPage {
+    $script:BloatPanel.Children.Clear()
+    $script:BloatChecks = @()
+    Update-BloatCount
+    [void]$script:BloatPanel.Children.Add((New-SectionHeader 'App dello Store' $true))
+    [void]$script:BloatPanel.Children.Add((New-Caption 'Lettura delle app installate…'))
+    [void](Start-Work -Background -Script { Send-BloatState })
+}
+
+function Update-BloatCount {
+    $n = @($script:BloatChecks | Where-Object { $_.IsChecked }).Count
+    $script:BloatRemoveBtn.Content = if ($n) { "Rimuovi selezionate ($n)" } else { 'Rimuovi selezionate' }
+    $script:BloatRemoveBtn.IsEnabled = ($n -gt 0)
+}
+
+function Show-BloatState {
+    param($Msg)
+    $panel = $script:BloatPanel
+    $panel.Children.Clear()
+    $script:BloatChecks = @()
+    $apps = @($Msg.Apps | Sort-Object @{ Expression = { -not $_.Rec } }, @{ Expression = { $_.Display } })
+    $progs = @($Msg.Programs)
+
+    [void]$panel.Children.Add((New-SectionHeader 'App dello Store' $true))
+    $rec = @($apps | Where-Object { $_.Rec }).Count
+    if ($apps.Count) {
+        [void]$panel.Children.Add((New-Caption ("{0} app rimovibili, {1} con rimozione consigliata. Componenti di sistema, Store, driver ed Edge non vengono mostrati. Puoi sempre reinstallarle dal Microsoft Store." -f $apps.Count, $rec)))
+        $sel = New-Row -Icon 0xE73E -Title 'Selezione rapida' -Desc 'Spunta tutte le app con rimozione consigliata, oppure togli tutte le spunte.'
+        [void]$sel.FindName('right').Children.Add((New-Btn 'Seleziona consigliate' '' $null { foreach ($c in $script:BloatChecks) { $c.IsChecked = [bool]$c.Tag.Rec }; Update-BloatCount } 0))
+        [void]$sel.FindName('right').Children.Add((New-Btn 'Nessuna' 'SubtleButton' $null { foreach ($c in $script:BloatChecks) { $c.IsChecked = $false }; Update-BloatCount }))
+        [void]$panel.Children.Add($sel)
+    } else {
+        [void]$panel.Children.Add((New-Caption 'Nessuna app preinstallata da rimuovere: il sistema è già pulito.'))
+    }
+    $tag = $TagTemplate.Replace('@FILL@', 'WarnFill').Replace('@TEXT@', 'WarnText').Replace('@LABEL@', 'Rimozione consigliata')
+    foreach ($a in $apps) {
+        $row = New-Row -Icon 0xE719 -Title $a.Display -Tags $(if ($a.Rec) { $tag } else { '' }) -Tip $a.FullName `
+            -Desc ('{0}  ·  versione {1}  ·  {2}' -f $a.Name, $a.Version, $a.Publisher) `
+            -Right '<CheckBox x:Name="ctl" VerticalAlignment="Center" Margin="14,0,0,0"/>'
+        $chk = $row.FindName('ctl')
+        $chk.Tag = $a
+        [System.Windows.Automation.AutomationProperties]::SetName($chk, "Rimuovi $($a.Display)")
+        $chk.Add_Checked({ Update-BloatCount }); $chk.Add_Unchecked({ Update-BloatCount })
+        $row.Tag = $chk
+        $row.Add_MouseLeftButtonUp({ $c = $args[0].Tag; $c.IsChecked = -not [bool]$c.IsChecked })
+        $script:BloatChecks += $chk
+        [void]$panel.Children.Add($row)
+    }
+
+    [void]$panel.Children.Add((New-SectionHeader 'Programmi desktop preinstallati'))
+    if ($progs.Count) {
+        [void]$panel.Children.Add((New-Caption 'Office/Microsoft 365 in più lingue, antivirus in prova e simili. «Disinstalla» apre il programma di disinstallazione ufficiale.'))
+        foreach ($p in $progs) {
+            $size = if ($p.SizeMB) { "  ·  $($p.SizeMB) MB" } else { '' }
+            $row = New-Row -Icon 0xE74D -Title $p.Name -Desc ('{0}  ·  versione {1}{2}' -f $p.Publisher, $p.Version, $size) -Tip $p.Uninstall
+            [void]$row.FindName('right').Children.Add((New-Btn 'Disinstalla' '' $p { Request-UninstallProgram $args[0].Tag } 0))
+            [void]$panel.Children.Add($row)
+        }
+    } else {
+        [void]$panel.Children.Add((New-Caption 'Nessun programma preinstallato riconosciuto (Office in prova, antivirus in prova…). Gli altri programmi si gestiscono da Strumenti → App installate.'))
+    }
+    Update-BloatCount
+}
+
+function Request-RemoveApps {
+    $sel = @($script:BloatChecks | Where-Object { $_.IsChecked } | ForEach-Object { $_.Tag })
+    if (-not $sel.Count) { return }
+    $script:AppsToRemove = $sel
+    Show-Dialog -Title "Rimuovere $($sel.Count) app?" `
+        -Body 'Le app verranno disinstallate per il tuo utente. Potrai reinstallarle in qualsiasi momento dal Microsoft Store.' `
+        -Items @($sel | ForEach-Object { "✕  $($_.Display)" }) `
+        -CheckText 'Impedisci la reinstallazione automatica per i nuovi utenti' -CheckValue ([bool]$script:Settings.deprovision) `
+        -Primary 'Rimuovi' -Secondary 'Annulla' -OnPrimary {
+        $script:Settings.deprovision = $script:DlgChecked; Save-Settings
+        Set-LogOpen $true
+        [void](Start-Work -Status 'Rimozione delle app…' -Vars @{ Apps = $script:AppsToRemove; Dep = [bool]$script:DlgChecked } `
+                -Script { Remove-Apps -Apps $Apps -Deprovision $Dep } -OnDone { if ($script:CurrentPage -eq 'bloat') { Update-BloatPage } })
+    }
+}
+
+# Avvia il disinstallatore del programma (per gli MSI forza /X = disinstalla, non /I = installa/ripara)
+function Request-UninstallProgram {
+    param([hashtable]$Program)
+    $script:ProgramToUninstall = $Program
+    Show-Dialog -Title "Disinstallare «$($Program.Name)»?" `
+        -Body 'Si aprirà il programma di disinstallazione ufficiale: segui le sue istruzioni per completare.' `
+        -Items @($Program.Uninstall) -Primary 'Disinstalla' -Secondary 'Annulla' -OnPrimary {
+        $p = $script:ProgramToUninstall
+        $cmd = [Environment]::ExpandEnvironmentVariables($p.Uninstall.Trim())
+        if ($cmd -match '(?i)msiexec(\.exe)?\s+/[IX]\s*(\{[0-9A-F-]+\})') { $file = 'msiexec.exe'; $arg = "/x $($Matches[2])" }
+        else {
+            $file = Get-ExePath $cmd
+            $rest = if ($cmd.StartsWith('"')) { $cmd.Substring($cmd.IndexOf('"', 1) + 1) } else { $cmd.Substring([math]::Min($cmd.Length, $file.Length)) }
+            $arg = $rest.Trim()
+        }
+        Set-LogOpen $true
+        if ($Sim) { Write-Log "Avvierebbe: $file $arg" 'SIM'; return }
+        try {
+            if ($arg) { Start-Process -FilePath $file -ArgumentList $arg -ErrorAction Stop } else { Start-Process -FilePath $file -ErrorAction Stop }
+            Write-Log "Avviata la disinstallazione di $($p.Name)." 'SUCCESS'
+            Show-Info 'info' "Disinstallazione di «$($p.Name)» avviata" 'Completa la procedura nella finestra che si è aperta, poi premi «Aggiorna».'
+        } catch {
+            Write-Log "Impossibile avviare la disinstallazione di $($p.Name): $($_.Exception.Message)" 'ERROR'
+            Show-Info 'error' 'Disinstallazione non avviata' $_.Exception.Message
+        }
+    }
+}
+
 # ---------------------------------------------------------------- pagina: Impostazioni
 $script:ThemeButtons = @{}
 
@@ -3146,6 +3368,7 @@ $PageDefs = @(
     @{ Key = 'privacy';  Title = 'Privacy';           Icon = 0xE705; Sub = 'Riduci tracciamento, telemetria e profilazione pubblicitaria.' },
     @{ Key = 'ui';       Title = 'Personalizzazione'; Icon = 0xE771; Sub = 'Esplora file, barra delle applicazioni e menu Start.' },
     @{ Key = 'apps';     Title = 'Avvio e notifiche'; Icon = 0xE768; Sub = 'App che partono con Windows e icone visibili nell''area di notifica.' },
+    @{ Key = 'bloat';    Title = 'App preinstallate'; Icon = 0xE8A9; Sub = 'Rimuovi app e programmi installati in fabbrica che non usi.' },
     @{ Key = 'clean';    Title = 'Pulizia';           Icon = 0xE74D; Sub = 'Recupera spazio eliminando cache, dump e file temporanei.' },
     @{ Key = 'net';      Title = 'Rete';              Icon = 0xE774; Sub = 'Desktop remoto, DNS veloci e riparazione della connessione.' },
     @{ Key = 'tools';    Title = 'Strumenti';         Icon = 0xE90F; Sub = 'Punti di ripristino, verifica dei file di sistema e manutenzione.' },
@@ -3166,8 +3389,9 @@ function Show-Page {
     if (-not $script:InfoSticky) { $ui.InfoBar.Visibility = 'Collapsed' }    # gli avvisi riguardano la pagina in cui sono nati
     $ui.HeaderActions.Children.Clear()
     foreach ($b in @($script:HeaderButtons[$Key])) { if ($b) { [void]$ui.HeaderActions.Children.Add($b) } }
-    $ui.CommandBar.Visibility = if ($Key -in 'settings', 'net', 'tools', 'apps') { 'Collapsed' } else { 'Visible' }
+    $ui.CommandBar.Visibility = if ($Key -in 'settings', 'net', 'tools', 'apps', 'bloat') { 'Collapsed' } else { 'Visible' }
     if ($Key -eq 'apps') { Update-AppsPage }
+    if ($Key -eq 'bloat') { Update-BloatPage }
     $ui.BtnSelectAll.Visibility = if ($Key -eq 'home') { 'Collapsed' } else { 'Visible' }
     $ui.BtnSelectAll.ToolTip = "Seleziona tutte le voci della pagina «$($PagesByKey[$Key].Title)»"
     $ui.PageScroll.ScrollToTop()
@@ -3203,6 +3427,7 @@ $script:PageContent.clean = Build-CleanPage
 $script:PageContent.net = Build-NetPage
 $script:PageContent.tools = Build-ToolsPage
 $script:PageContent.apps = Build-AppsPage
+$script:PageContent.bloat = Build-BloatPage
 $script:PageContent.settings = Build-SettingsPage
 
 # ---------------------------------------------------------------- pulsanti della barra dei comandi
@@ -3256,6 +3481,7 @@ function Receive-UiMessages {
             'dns'      { Update-DnsView ([string[]]$msg.Servers) }
             'rdp'      { Update-RdpView ([bool]$msg.Enabled) }
             'update'   { Receive-UpdateInfo $msg }
+            'bloat'    { Show-BloatState $msg }
             'updateReady' { Receive-UpdateReady $msg }
         }
     }

@@ -9,8 +9,8 @@ using System.Windows.Forms;
 [assembly: AssemblyProduct("WinOptima Portable")]
 [assembly: AssemblyCompany("WinOptima")]
 [assembly: AssemblyCopyright("WinOptima Portable")]
-[assembly: AssemblyVersion("3.3.0.0")]
-[assembly: AssemblyFileVersion("3.3.0.0")]
+[assembly: AssemblyVersion("3.4.0.0")]
+[assembly: AssemblyFileVersion("3.4.0.0")]
 
 namespace WinOptimaLauncher
 {
