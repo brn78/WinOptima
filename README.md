@@ -16,6 +16,9 @@ Fai doppio clic su **`WinOptima.exe`**: chiede l'elevazione UAC, estrae il progr
 
 Per lo sviluppo si può anche avviare lo script direttamente (`WinOptima.bat` oppure `WinOptima.ps1`). Per provare l'app senza rischi: `powershell -ExecutionPolicy Bypass -File .\WinOptima.ps1 -Simulate` (non servono i privilegi di amministratore e **non viene modificato nulla**).
 
+## 🆕 Novità della versione 3.6
+* Logo **GitHub** in fondo al menu (e in *Impostazioni → Informazioni*): un clic apre il profilo [github.com/brn78](https://github.com/brn78). Accanto c'è anche il link al sito del progetto.
+
 ## 🆕 Novità della versione 3.5
 * Nuova pagina **App preinstallate**:
   * **App dello Store** rimovibili, con *Rimozione consigliata* già indicata per quelle superflue (Microsoft 365/Office Hub, Notizie, Meteo, Solitaire, Clipchamp, Teams personale, Candy Crush, TikTok…). Con *Seleziona consigliate* ne spunti tante in un clic; su richiesta impedisce che tornino per i nuovi utenti. Componenti di sistema, Store, driver, utilità hardware ed Edge non vengono mai mostrati. Si reinstalla tutto dal Microsoft Store.
