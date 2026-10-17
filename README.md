@@ -16,6 +16,9 @@ Fai doppio clic su **`WinOptima.exe`**: chiede l'elevazione UAC, estrae il progr
 
 Per lo sviluppo si può anche avviare lo script direttamente (`WinOptima.bat` oppure `WinOptima.ps1`). Per provare l'app senza rischi: `powershell -ExecutionPolicy Bypass -File .\WinOptima.ps1 -Simulate` (non servono i privilegi di amministratore e **non viene modificato nulla**).
 
+## 🆕 Novità della versione 3.4
+* **Nascondi «Riprendi» dalla barra** (Windows 11), insieme a Cerca, Visualizzazione attività e Widget: tutti gli elementi della barra delle applicazioni si gestiscono da WinOptima.
+
 ## 🆕 Novità della versione 3.3
 * **Nascondi «Cerca» dalla barra** (Personalizzazione → Barra delle applicazioni).
 * **«Seleziona tutto» agisce solo sulla pagina visibile**: prima selezionava le voci di tutte le pagine (per esempio, dalla Pulizia attivava anche «Allinea la barra a sinistra»).

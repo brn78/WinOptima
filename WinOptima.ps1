@@ -11,7 +11,7 @@
 [CmdletBinding()]
 param([switch]$Simulate)
 
-$script:AppVersion = '3.3'
+$script:AppVersion = '3.4'
 $script:AppDir = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
 $script:ErrorLog = Join-Path $script:AppDir 'WinOptima-error.log'
 
@@ -576,6 +576,13 @@ $Engine = {
         Desc  = 'Toglie casella o icona di ricerca: per cercare basta aprire Start e iniziare a scrivere.'
         Tip   = 'HKCU\Software\Microsoft\Windows\CurrentVersion\Search\SearchboxTaskbarMode = 0 (ripristino: casella di ricerca)'
         Reg   = @(@{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Search'; Name = 'SearchboxTaskbarMode'; On = 0; Off = 2 })
+    }
+    Register-Item @{
+        Id = 'hideResume'; Page = 'ui'; Group = 'Barra delle applicazioni'; Icon = 0xE7F4; Win11 = $true; Explorer = $true
+        Title = 'Nascondi «Riprendi» dalla barra'
+        Desc  = 'Niente icona con notifica badge per riprendere sul PC le attività iniziate sul telefono.'
+        Tip   = "$KeyAdv\IsEnabled = 0 (individuata confrontando il registro prima e dopo l'interruttore delle Impostazioni)"
+        Reg   = @(@{ Path = $KeyAdv; Name = 'IsEnabled'; On = 0; Off = 1 })
     }
     Register-Item @{
         Id = 'taskView'; Page = 'ui'; Group = 'Barra delle applicazioni'; Icon = 0xE7C4; Explorer = $true
