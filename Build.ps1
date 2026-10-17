@@ -159,6 +159,18 @@ $csc = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
 if (-not (Test-Path $csc)) { $csc = Join-Path $env:WINDIR 'Microsoft.NET\Framework\v4.0.30319\csc.exe' }
 if (-not (Test-Path $csc)) { throw 'Compilatore C# (csc.exe) non trovato: serve .NET Framework 4.x (incluso in Windows 10/11).' }
 
+# Unica fonte della versione: $script:AppVersion in WinOptima.ps1 -> exe e manifest
+$appVer = [regex]::Match([IO.File]::ReadAllText((Join-Path $root 'WinOptima.ps1')), "AppVersion\s*=\s*'([\d.]+)'").Groups[1].Value
+if (-not $appVer) { throw 'Versione non trovata in WinOptima.ps1 ($script:AppVersion).' }
+$p = @($appVer.Split('.')) + @('0', '0', '0'); $fullVer = ($p[0..3] -join '.')
+foreach ($f in 'Launcher.cs', 'app.manifest') {
+    $path = Join-Path $root $f
+    $txt = [IO.File]::ReadAllText($path)
+    $new = $txt -replace 'Assembly(File)?Version\("[\d.]+"\)', "Assembly`$1Version(`"$fullVer`")" -replace '(assemblyIdentity version=")[\d.]+', "`${1}$fullVer"
+    if ($new -ne $txt) { [IO.File]::WriteAllText($path, $new, (New-Object Text.UTF8Encoding($f -eq 'Launcher.cs'))) }
+}
+Write-Host "      versione $fullVer"
+
 $exePath = Join-Path $root 'WinOptima.exe'
 $cscArgs = @(
     '/nologo', '/target:winexe', '/optimize+', '/codepage:65001',

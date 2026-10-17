@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Diagnostics;
 using System.IO;
 using System.Reflection;
@@ -9,8 +9,8 @@ using System.Windows.Forms;
 [assembly: AssemblyProduct("WinOptima Portable")]
 [assembly: AssemblyCompany("WinOptima")]
 [assembly: AssemblyCopyright("WinOptima Portable")]
-[assembly: AssemblyVersion("3.1.0.0")]
-[assembly: AssemblyFileVersion("3.1.0.0")]
+[assembly: AssemblyVersion("3.2.0.0")]
+[assembly: AssemblyFileVersion("3.2.0.0")]
 
 namespace WinOptimaLauncher
 {
@@ -58,6 +58,8 @@ namespace WinOptimaLauncher
                 };
                 // Dice allo script che l'errore lo mostra il launcher (evita il doppio messaggio)
                 psInfo.EnvironmentVariables["WINOPTIMA_LAUNCHER"] = "1";
+                // Percorso di questo exe: serve all'aggiornamento automatico per sostituirlo
+                psInfo.EnvironmentVariables["WINOPTIMA_EXE"] = Application.ExecutablePath;
 
                 using (Process psProc = Process.Start(psInfo))
                 {

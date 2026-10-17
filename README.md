@@ -16,6 +16,12 @@ Fai doppio clic su **`WinOptima.exe`**: chiede l'elevazione UAC, estrae il progr
 
 Per lo sviluppo si può anche avviare lo script direttamente (`WinOptima.bat` oppure `WinOptima.ps1`). Per provare l'app senza rischi: `powershell -ExecutionPolicy Bypass -File .\WinOptima.ps1 -Simulate` (non servono i privilegi di amministratore e **non viene modificato nulla**).
 
+## 🆕 Novità della versione 3.2
+* **Aggiornamenti automatici**: all'avvio WinOptima controlla le release su GitHub. Se c'è una versione nuova la scarica, ne verifica integrità (dimensione e SHA-256) e la installa alla chiusura, oppure subito con *Riavvia e aggiorna*. La versione precedente resta accanto come `WinOptima.old.exe`, quindi al massimo 2 exe. Si può disattivare da *Impostazioni → Aggiornamenti*.
+* **Si vede sempre cosa sta succedendo**: barra «in corso» con il passo attuale (es. *Passo 5 di 17: Attivo: Menu più reattivi*), percentuale nel titolo e avanzamento sull'icona della barra delle applicazioni.
+* **Registro attività ridimensionabile**: trascina la maniglia sul bordo superiore; l'altezza viene ricordata.
+* **Widget**: ora si nascondono tramite la policy ufficiale di Windows (la vecchia chiave è protetta dal driver UCPD e dava «operazione non autorizzata»).
+
 ## 🆕 Novità della versione 3.1
 * **Exe unico e portatile** che si estrae in AppData.
 * Nuova pagina **Avvio e notifiche**:
@@ -94,7 +100,8 @@ Punto di ripristino · SFC · DISM · Ripristino di Windows Update · Riavvio di
 
 | File | Scopo |
 |---|---|
-| `WinOptima.exe` | **L'unico file da distribuire**: contiene script e icona |
+| `WinOptima.exe` | **L'unico file da distribuire** (contiene script e icona): si genera con `Build.ps1` e si pubblica solo nelle [release](https://github.com/brn78/WinOptima/releases) |
+| `Publish.ps1` | Crea la release su GitHub con l'exe e tiene solo le ultime 2 |
 | `WinOptima.ps1` | Sorgente dell'applicazione (motore + interfaccia), incorporato nell'exe |
 | `WinOptima.bat` | Avvio diretto dello script (sviluppo) |
 | `WinOptima.ico` | Icona (incorporata nell'exe) |
@@ -102,6 +109,11 @@ Punto di ripristino · SFC · DISM · Ripristino di Windows Update · Riavvio di
 | `_backup-originale/` | Copia dei file della versione 2.0 (puoi eliminarla) |
 
 In `%LOCALAPPDATA%\WinOptima` l'app crea `WinOptima.settings.json` (preferenze), `Backup\` (voci di avvio eliminate) e, in caso di problemi, `WinOptima-error.log`.
+
+### Pubblicare una nuova versione
+1. Aumenta `$script:AppVersion` in `WinOptima.ps1` (es. `'3.3'`): è l'unica fonte della versione, `Build.ps1` la copia nell'exe.
+2. Fai commit e push.
+3. `powershell -ExecutionPolicy Bypass -File .\Publish.ps1 -Notes "Cosa cambia"`: compila, crea la release `v3.3` con l'exe ed elimina quelle più vecchie, tenendo le ultime 2. Le copie installate si aggiornano da sole al prossimo avvio.
 
 ### Ricostruire icona ed exe
 Non servono SDK: basta il compilatore incluso in Windows. Dopo ogni modifica a `WinOptima.ps1` rilancia la build, così l'exe incorpora la nuova versione.

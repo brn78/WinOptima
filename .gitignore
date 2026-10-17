@@ -5,3 +5,7 @@ _backup-originale/
 WinOptima.settings.json
 WinOptima-error.log
 Backup/
+
+# L'exe si pubblica solo come asset delle release (ne restano al massimo 2)
+WinOptima.exe
+*.old.exe

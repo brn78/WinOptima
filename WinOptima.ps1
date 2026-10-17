@@ -11,7 +11,7 @@
 [CmdletBinding()]
 param([switch]$Simulate)
 
-$script:AppVersion = '3.1'
+$script:AppVersion = '3.2'
 $script:AppDir = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
 $script:ErrorLog = Join-Path $script:AppDir 'WinOptima-error.log'
 
@@ -810,12 +810,15 @@ $Engine = {
         Send-Ui 'progress' @{ Value = 0; Max = $total }
 
         if ($RestorePoint) {
+            Send-Ui 'progress' @{ Value = 0; Max = $total; Text = 'Creazione del punto di ripristino' }
             [void](New-RestorePoint)
             $done++
             Send-Ui 'progress' @{ Value = $done; Max = $total }
         }
         foreach ($step in $Steps) {
             $item = $Catalog[$step.Id]
+            $verb = switch ($step.Mode) { 'apply' { 'Attivo' } 'revert' { 'Ripristino' } default { 'Eseguo' } }
+            Send-Ui 'progress' @{ Value = $done; Max = $total; Text = "${verb}: $($item.Title)" }
             if ($item.Kind -eq 'action') {
                 $r = Invoke-CleanAction $item
                 if ($r.Ok) { $ok++ } else { $fail++ }
@@ -829,7 +832,10 @@ $Engine = {
             $done++
             Send-Ui 'progress' @{ Value = $done; Max = $total }
         }
-        if ($needExplorer -and $AutoExplorer) { Restart-Explorer }
+        if ($needExplorer -and $AutoExplorer) {
+            Send-Ui 'progress' @{ Value = $done; Max = $total; Text = 'Riavvio di Esplora risorse' }
+            Restart-Explorer
+        }
         elseif ($needExplorer) { Write-Log 'Alcune modifiche saranno visibili dopo il riavvio di Esplora risorse (o di Windows).' 'WARN' }
 
         if ($fail -eq 0) { Write-Log '--- OPERAZIONE COMPLETATA ---' 'SUCCESS' }
@@ -845,8 +851,8 @@ $Engine = {
         $i = 0
         foreach ($id in $Ids) {
             $item = $Catalog[$id]
+            Send-Ui 'progress' @{ Value = $i; Max = $Ids.Count; Text = "Analizzo: $($item.Title)" }
             $i++
-            Send-Ui 'progress' @{ Value = $i; Max = $Ids.Count }
             if (-not $item.Paths) { continue }
             try {
                 $bytes = Measure-Targets @(& $item.Paths)
@@ -1153,6 +1159,67 @@ $Engine = {
             New-ItemProperty -LiteralPath $k -Name 'IsPromoted' -Value $(if ($Promoted) { 1 } else { 0 }) -PropertyType DWord -Force -ErrorAction Stop | Out-Null
         }
         Write-Log "Icona «$($Icon.Name)»: $what." 'SUCCESS'
+    }
+
+    # ---------------------------------------------------------------- aggiornamenti da GitHub
+    $UpdateRepo = 'brn78/WinOptima'
+
+    function ConvertTo-AppVersion {
+        param([string]$Text)
+        $t = ($Text -replace '^[vV]', '').Trim()
+        if ($t -notmatch '^\d+(\.\d+){1,3}$') { return $null }
+        if ($t -notmatch '\.') { $t += '.0' }
+        [version]$t
+    }
+
+    # Controlla l'ultima release pubblicata; invia 'update' alla UI solo se è più recente di $CurrentVersion
+    function Find-AppUpdate {
+        param([string]$CurrentVersion, [switch]$Manual)
+        try {
+            [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+            $rel = Invoke-RestMethod -Uri "https://api.github.com/repos/$UpdateRepo/releases/latest" -TimeoutSec 15 `
+                -Headers @{ 'User-Agent' = 'WinOptima-Updater'; 'Accept' = 'application/vnd.github+json' } -ErrorAction Stop
+            $latest = ConvertTo-AppVersion $rel.tag_name
+            $current = ConvertTo-AppVersion $CurrentVersion
+            $asset = @($rel.assets | Where-Object { $_.name -eq 'WinOptima.exe' }) | Select-Object -First 1
+            if ($latest -and $current -and $latest -gt $current -and $asset) {
+                $digest = if ($asset.PSObject.Properties['digest'] -and $asset.digest -like 'sha256:*') { $asset.digest.Substring(7) } else { '' }
+                Send-Ui 'update' @{ Version = "$latest"; Url = $asset.browser_download_url; Size = [int64]$asset.size; Sha256 = $digest; Page = $rel.html_url; Notes = [string]$rel.body }
+            } elseif ($Manual) {
+                Send-Ui 'update' @{ Version = ''; Current = $true }
+                Write-Log "WinOptima è aggiornato (versione $CurrentVersion, ultima pubblicata $($rel.tag_name))." 'SUCCESS'
+            }
+        } catch {
+            if ($Manual) { Write-Log "Controllo aggiornamenti non riuscito: $($_.Exception.Message)" 'WARN'; Send-Ui 'update' @{ Version = ''; Failed = $true } }
+        }
+    }
+
+    # Scarica il nuovo exe in AppData e ne verifica dimensione, intestazione e (se fornito da GitHub) SHA-256
+    function Save-AppUpdate {
+        param([string]$Url, [int64]$Size, [string]$Sha256, [string]$Version)
+        try {
+            [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+            $dir = Join-Path $env:LOCALAPPDATA 'WinOptima\update'
+            New-Item -ItemType Directory -Force -Path $dir | Out-Null
+            Get-ChildItem -LiteralPath $dir -Filter '*.exe' -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+            $dest = Join-Path $dir "WinOptima-$Version.exe"
+            Write-Log "Download di WinOptima $Version…"
+            $wc = New-Object System.Net.WebClient
+            $wc.Headers.Add('User-Agent', 'WinOptima-Updater')
+            $wc.DownloadFile($Url, $dest)
+            $bytes = [IO.File]::ReadAllBytes($dest)
+            if ($Size -gt 0 -and $bytes.Length -ne $Size) { throw "dimensione inattesa ($($bytes.Length) invece di $Size byte)" }
+            if ($bytes.Length -lt 2 -or $bytes[0] -ne 0x4D -or $bytes[1] -ne 0x5A) { throw 'il file scaricato non è un eseguibile valido' }
+            if ($Sha256) {
+                $h = (Get-FileHash -LiteralPath $dest -Algorithm SHA256).Hash
+                if ($h -ne $Sha256.ToUpperInvariant()) { throw 'impronta SHA-256 non corrispondente' }
+            }
+            Write-Log "Aggiornamento $Version scaricato e verificato." 'SUCCESS'
+            Send-Ui 'updateReady' @{ Path = $dest; Version = $Version }
+        } catch {
+            Write-Log "Download dell'aggiornamento non riuscito: $($_.Exception.Message)" 'WARN'
+            Send-Ui 'updateReady' @{ Path = ''; Version = $Version }
+        }
     }
 
     # ---------------------------------------------------------------- informazioni di sistema
@@ -1630,9 +1697,39 @@ $WindowXaml = @'
                 <TextBlock x:Name="InfoTitle" FontWeight="SemiBold" TextWrapping="Wrap"/>
                 <TextBlock x:Name="InfoMessage" Style="{StaticResource TxtSecondary}" TextWrapping="Wrap" FontSize="13"/>
               </StackPanel>
-              <Button x:Name="InfoClose" Grid.Column="2" Style="{StaticResource SubtleButton}" Padding="9,6" MinHeight="0" VerticalAlignment="Top" ToolTip="Chiudi">
-                <TextBlock Style="{StaticResource Glyph}" Text="&#xE711;" FontSize="12"/>
-              </Button>
+              <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                <Button x:Name="InfoAction" Style="{StaticResource AccentButton}" Visibility="Collapsed" Margin="12,0,6,0" Padding="14,4,14,5"/>
+                <Button x:Name="InfoClose" Style="{StaticResource SubtleButton}" Padding="9,6" MinHeight="0" ToolTip="Chiudi">
+                  <TextBlock Style="{StaticResource Glyph}" Text="&#xE711;" FontSize="12"/>
+                </Button>
+              </StackPanel>
+            </Grid>
+          </Border>
+
+          <!-- Operazione in corso: sempre in vista, qualunque pagina si stia guardando -->
+          <Border x:Name="BusyBar" Visibility="Collapsed" CornerRadius="4" BorderThickness="1" Padding="14,10,14,12" Margin="0,14,0,0"
+                  Background="{DynamicResource InfoFill}" BorderBrush="{DynamicResource Accent}">
+            <Grid>
+              <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+              <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+              <TextBlock Style="{StaticResource Glyph}" Text="&#xE895;" Foreground="{DynamicResource Accent}" FontSize="16"
+                         Margin="0,1,12,0" VerticalAlignment="Center" RenderTransformOrigin="0.5,0.5">
+                <TextBlock.RenderTransform><RotateTransform/></TextBlock.RenderTransform>
+                <TextBlock.Triggers>
+                  <EventTrigger RoutedEvent="Loaded">
+                    <BeginStoryboard><Storyboard RepeatBehavior="Forever">
+                      <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(RotateTransform.Angle)" From="0" To="360" Duration="0:0:1.2"/>
+                    </Storyboard></BeginStoryboard>
+                  </EventTrigger>
+                </TextBlock.Triggers>
+              </TextBlock>
+              <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                <TextBlock x:Name="BusyTitle" FontWeight="SemiBold" Text="Operazione in corso…" TextTrimming="CharacterEllipsis"/>
+                <TextBlock x:Name="BusyDetail" Style="{StaticResource TxtSecondary}" FontSize="13" TextTrimming="CharacterEllipsis"/>
+              </StackPanel>
+              <TextBlock x:Name="BusyCount" Grid.Column="2" FontSize="20" FontWeight="SemiBold" VerticalAlignment="Center"
+                         Foreground="{DynamicResource Accent}" Margin="12,0,0,0"/>
+              <ProgressBar x:Name="BusyProgress" Grid.Row="1" Grid.ColumnSpan="3" Margin="0,10,0,0" IsIndeterminate="True"/>
             </Grid>
           </Border>
         </StackPanel>
@@ -1664,6 +1761,21 @@ $WindowXaml = @'
         <Border Grid.Row="3" Background="{DynamicResource LogFill}" BorderBrush="{DynamicResource CardStroke}" BorderThickness="0,1,0,0">
           <Grid>
             <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+            <!-- Maniglia per ridimensionare il registro trascinandone il bordo superiore -->
+            <Thumb x:Name="LogGrip" Grid.Row="0" Height="8" VerticalAlignment="Top" Margin="0,-4,0,0" Cursor="SizeNS"
+                   Visibility="Collapsed" ToolTip="Trascina per ridimensionare il registro">
+              <Thumb.Template>
+                <ControlTemplate TargetType="Thumb">
+                  <Grid Background="Transparent">
+                    <Border x:Name="Pill" Width="40" Height="4" CornerRadius="2" Background="{DynamicResource ScrollThumb}" Opacity="0.35"/>
+                  </Grid>
+                  <ControlTemplate.Triggers>
+                    <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Pill" Property="Opacity" Value="1"/></Trigger>
+                    <Trigger Property="IsDragging" Value="True"><Setter TargetName="Pill" Property="Opacity" Value="1"/><Setter TargetName="Pill" Property="Background" Value="{DynamicResource Accent}"/></Trigger>
+                  </ControlTemplate.Triggers>
+                </ControlTemplate>
+              </Thumb.Template>
+            </Thumb>
             <Grid Grid.Row="0" Margin="16,5,12,5">
               <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/>
@@ -1733,7 +1845,7 @@ $WindowXaml = @'
 
 # ---------------------------------------------------------------- impostazioni persistenti
 $script:SettingsPath = Join-Path $script:AppDir 'WinOptima.settings.json'
-$script:Settings = @{ theme = 'system'; simulate = $false; restartExplorer = $true; restorePoint = $false; logOpen = $false }
+$script:Settings = @{ theme = 'system'; simulate = $false; restartExplorer = $true; restorePoint = $false; logOpen = $false; logHeight = 200; autoUpdate = $true }
 
 function Read-Settings {
     try {
@@ -1761,9 +1873,13 @@ foreach ($n in 'NavLogo', 'NavLogoFallback', 'NavVersion', 'NavList', 'NavFooter
     'SimBanner', 'InfoBar', 'InfoIcon', 'InfoTitle', 'InfoMessage', 'InfoClose', 'PageScroll', 'PageHost', 'CommandBar',
     'BtnPreset', 'BtnSelectAll', 'BtnReset', 'PendingText', 'BtnApply', 'BtnLogToggle', 'LogChevron', 'StatusIcon', 'StatusText',
     'WorkProgress', 'BtnLogSave', 'BtnLogClear', 'LogBox', 'DialogLayer', 'DlgTitle', 'DlgBody', 'DlgListBox', 'DlgList',
-    'DlgCheck', 'DlgPrimary', 'DlgSecondary') {
+    'DlgCheck', 'DlgPrimary', 'DlgSecondary', 'BusyBar', 'BusyTitle', 'BusyDetail', 'BusyCount', 'BusyProgress', 'LogGrip', 'InfoAction') {
     $ui[$n] = $window.FindName($n)
 }
+
+# Avanzamento anche sul pulsante nella barra delle applicazioni (verde = in corso)
+$window.TaskbarItemInfo = New-Object System.Windows.Shell.TaskbarItemInfo
+$script:BaseTitle = $window.Title
 
 $icoPath = Join-Path $script:AppDir 'WinOptima.ico'
 if (Test-Path -LiteralPath $icoPath) {
@@ -2023,10 +2139,23 @@ function Add-LogLine {
 function Set-LogOpen {
     param([bool]$Open)
     $ui.LogBox.Visibility = if ($Open) { 'Visible' } else { 'Collapsed' }
+    $ui.LogGrip.Visibility = $ui.LogBox.Visibility
+    $ui.LogBox.Height = Limit-LogHeight ([double]$script:Settings.logHeight)
     $ui.LogChevron.Text = if ($Open) { [string][char]0xE70D } else { [string][char]0xE70E }
     $script:Settings.logOpen = $Open
     if ($Open) { $ui.LogBox.ScrollToEnd() }
 }
+
+# Il registro può crescere fino a lasciare almeno ~260 px alla pagina
+function Limit-LogHeight {
+    param([double]$H)
+    $max = [math]::Max(120, $window.ActualHeight - 330)
+    if ($window.ActualHeight -le 0) { $max = 600 }
+    [math]::Round([math]::Min($max, [math]::Max(90, $H)))
+}
+
+$ui.LogGrip.Add_DragDelta({ $ui.LogBox.Height = Limit-LogHeight ($ui.LogBox.Height - $args[1].VerticalChange) })
+$ui.LogGrip.Add_DragCompleted({ $script:Settings.logHeight = $ui.LogBox.Height; Save-Settings })
 
 function Set-Status {
     param([string]$Text, [string]$Level = 'ok')
@@ -2039,7 +2168,12 @@ function Set-Status {
 }
 
 function Show-Info {
-    param([string]$Level, [string]$Title, [string]$Message = '')
+    # -ActionText/-OnAction: pulsante d'azione nell'avviso; -Sticky: resta visibile anche cambiando pagina
+    param([string]$Level, [string]$Title, [string]$Message = '', [string]$ActionText = '', [scriptblock]$OnAction, [switch]$Sticky)
+    $script:InfoOnAction = $OnAction
+    $script:InfoSticky = $Sticky.IsPresent
+    $ui.InfoAction.Content = $ActionText
+    $ui.InfoAction.Visibility = if ($ActionText -and $OnAction) { 'Visible' } else { 'Collapsed' }
     $map = @{
         success = 0xE930, 'SuccessText', 'SuccessFill'
         warning = 0xE7BA, 'WarnText', 'WarnFill'
@@ -2056,7 +2190,84 @@ function Show-Info {
     $ui.InfoBar.Visibility = 'Visible'
 }
 
-$ui.InfoClose.Add_Click({ $ui.InfoBar.Visibility = 'Collapsed' })
+$ui.InfoClose.Add_Click({ $ui.InfoBar.Visibility = 'Collapsed'; $script:InfoSticky = $false })
+$ui.InfoAction.Add_Click({ if ($script:InfoOnAction) { & $script:InfoOnAction } })
+
+# ---------------------------------------------------------------- aggiornamenti automatici
+# Il launcher passa il proprio percorso in WINOPTIMA_EXE: solo così l'app sa quale exe sostituire.
+# Si tengono al massimo 2 exe: quello attuale e «<nome>.old.exe» (la versione precedente, per tornare indietro).
+$script:UpdateInfo = $null
+$script:UpdateReady = $null
+$script:Relaunching = $false
+
+function Start-UpdateCheck {
+    param([switch]$Manual)
+    $script:ManualCheck = $Manual.IsPresent
+    [void](Start-Work -Background -Vars @{ AppVer = $script:AppVersion; IsManual = $Manual.IsPresent } -Script {
+            if ($IsManual) { Find-AppUpdate -CurrentVersion $AppVer -Manual } else { Find-AppUpdate -CurrentVersion $AppVer } })
+}
+
+function Receive-UpdateInfo {
+    param($Msg)
+    if (-not $Msg.Version) {
+        if ($Msg.Current) { Show-Info 'success' 'WinOptima è aggiornato' "Stai usando l'ultima versione ($script:AppVersion)." }
+        elseif ($Msg.Failed) { Show-Info 'warning' 'Controllo aggiornamenti non riuscito' 'Verifica la connessione a Internet e riprova più tardi.' }
+        return
+    }
+    $script:UpdateInfo = $Msg
+    Add-LogLine (Get-Date) 'INFO' "Disponibile WinOptima $($Msg.Version) (in uso: $script:AppVersion)."
+    $exe = $env:WINOPTIMA_EXE
+    if ($exe -and (Test-Path -LiteralPath $exe)) {
+        # Avviato dall'exe: scarica subito in background, poi installa alla chiusura o su richiesta
+        [void](Start-Work -Background -Vars @{ U = $Msg } -Script { Save-AppUpdate -Url $U.Url -Size $U.Size -Sha256 $U.Sha256 -Version $U.Version })
+    } else {
+        Show-Info 'info' "Disponibile WinOptima $($Msg.Version)" 'Stai eseguendo lo script direttamente: scarica il nuovo exe dalla pagina della release.' `
+            -ActionText 'Apri la release' -OnAction { Start-Process $script:UpdateInfo.Page } -Sticky
+    }
+}
+
+function Receive-UpdateReady {
+    param($Msg)
+    if (-not $Msg.Path) {
+        Show-Info 'warning' "Aggiornamento a $($Msg.Version) non scaricato" 'Riproveremo al prossimo avvio. Puoi anche scaricarlo a mano dalla pagina della release.' `
+            -ActionText 'Apri la release' -OnAction { Start-Process $script:UpdateInfo.Page }
+        return
+    }
+    $script:UpdateReady = $Msg.Path
+    Show-Info 'success' "WinOptima $($Msg.Version) è pronto" 'Verrà installato alla chiusura dell''app, oppure subito con un riavvio.' `
+        -ActionText 'Riavvia e aggiorna' -OnAction {
+        if ($script:Busy) { Show-Info 'warning' 'Attendi la fine dell''operazione in corso' 'L''aggiornamento si installerà comunque alla chiusura.'; return }
+        [void](Install-AppUpdate -Relaunch)
+    } -Sticky
+}
+
+# Sostituisce l'exe: quello attuale diventa .old.exe (rinominare un exe in esecuzione è consentito), il nuovo prende il suo posto
+function Install-AppUpdate {
+    param([switch]$Relaunch)
+    $exe = $env:WINOPTIMA_EXE
+    $new = $script:UpdateReady
+    if (-not $exe -or -not $new -or -not (Test-Path -LiteralPath $exe) -or -not (Test-Path -LiteralPath $new)) { return $false }
+    $old = Join-Path (Split-Path -Parent $exe) ([IO.Path]::GetFileNameWithoutExtension($exe) + '.old.exe')
+    try {
+        if (Test-Path -LiteralPath $old) { Remove-Item -LiteralPath $old -Force -ErrorAction Stop }
+        Move-Item -LiteralPath $exe -Destination $old -Force -ErrorAction Stop
+        try { Copy-Item -LiteralPath $new -Destination $exe -Force -ErrorAction Stop }
+        catch { Move-Item -LiteralPath $old -Destination $exe -Force; throw }
+        Remove-Item -LiteralPath $new -Force -ErrorAction SilentlyContinue
+        $script:UpdateReady = $null
+        Write-Log "WinOptima aggiornato alla versione $($script:UpdateInfo.Version). Versione precedente conservata in $old" 'SUCCESS'
+        if ($Relaunch) {
+            $script:Relaunching = $true
+            Start-Process -FilePath $exe
+            $window.Close()
+        }
+        return $true
+    } catch {
+        Write-Log "Installazione dell'aggiornamento non riuscita: $($_.Exception.Message)" 'ERROR'
+        if ($Relaunch) { Show-Info 'error' 'Aggiornamento non riuscito' "$($_.Exception.Message). La cartella dell'exe potrebbe essere in sola lettura." }
+        return $false
+    }
+}
 
 # ---------------------------------------------------------------- dialogo di conferma
 $script:DlgOnPrimary = $null
@@ -2099,7 +2310,35 @@ function Set-Busy {
     $script:Busy = $Busy
     $ui.WorkProgress.Visibility = if ($Busy) { 'Visible' } else { 'Hidden' }
     if ($Busy) { $ui.WorkProgress.IsIndeterminate = $true }
+    # Barra «in corso» ben visibile + barra delle applicazioni + titolo della finestra
+    $ui.BusyBar.Visibility = if ($Busy) { 'Visible' } else { 'Collapsed' }
+    $ui.BusyProgress.IsIndeterminate = $true
+    $ui.BusyDetail.Text = if ($Busy) { 'Preparazione…' } else { '' }
+    $ui.BusyCount.Text = ''
+    $window.TaskbarItemInfo.ProgressState = if ($Busy) { 'Indeterminate' } else { 'None' }
+    $window.Title = $script:BaseTitle
     Update-Pending
+}
+
+function Update-BusyProgress {
+    param($Msg)
+    $max = [math]::Max(1, [int]$Msg.Max)
+    $val = [math]::Min($max, [int]$Msg.Value)
+    $ui.WorkProgress.IsIndeterminate = $false
+    $ui.WorkProgress.Maximum = $max
+    $ui.WorkProgress.Value = $val
+    if (-not $script:Busy) { return }
+    $ui.BusyProgress.IsIndeterminate = $false
+    $ui.BusyProgress.Maximum = $max
+    $ui.BusyProgress.Value = $val
+    $step = [math]::Min($max, $val + 1)
+    if ($Msg.Text) {
+        $ui.BusyDetail.Text = "Passo $step di ${max}: $($Msg.Text)"
+        $ui.BusyCount.Text = '{0}%' -f [int](100 * $val / $max)
+    }
+    $window.TaskbarItemInfo.ProgressState = 'Normal'
+    $window.TaskbarItemInfo.ProgressValue = $val / $max
+    $window.Title = '({0}%) {1}' -f [int](100 * $val / $max), $script:BaseTitle
 }
 
 function Start-Work {
@@ -2121,6 +2360,7 @@ function Start-Work {
     $job = @{ PS = $ps; RS = $rs; Background = $Background.IsPresent; OnDone = $OnDone }
     if (-not $Background) {
         Set-Busy $true
+        $ui.BusyTitle.Text = if ($Status) { $Status } else { 'Operazione in corso…' }
         if ($Status) { Set-Status $Status 'busy' }
     }
     $job.Handle = $ps.BeginInvoke()
@@ -2171,7 +2411,7 @@ function Update-Pending {
         if ($changed) { $n++ }
     }
     $ui.PendingText.Text = switch ($n) { 0 { 'Nessuna modifica in sospeso' } 1 { '1 modifica in sospeso' } default { "$n modifiche in sospeso" } }
-    $ui.BtnApply.Content = if ($n -gt 0) { "Applica ($n)" } else { 'Applica' }
+    $ui.BtnApply.Content = if ($script:Busy) { 'In corso…' } elseif ($n -gt 0) { "Applica ($n)" } else { 'Applica' }
     $ui.BtnApply.IsEnabled = ($n -gt 0) -and (-not $script:Busy)
     Update-HomeOptimizations
 }
@@ -2868,6 +3108,16 @@ function Build-SettingsPage {
     $tgl.Add_Unchecked($onExplorer)
     [void]$panel.Children.Add($row)
 
+    [void]$panel.Children.Add((New-SectionHeader 'Aggiornamenti'))
+    $row = New-Row -Icon 0xE895 -Title 'Aggiornamenti automatici' -Right $tpl `
+        -Desc "Versione installata: $script:AppVersion. All'avvio controlla le release su GitHub (contatta solo api.github.com), scarica e verifica la nuova versione e la installa alla chiusura. La precedente resta come «.old.exe»."
+    $tgl = $row.FindName('tgl'); $tgl.IsChecked = [bool]$script:Settings.autoUpdate
+    $onUpd = { $script:Settings.autoUpdate = [bool]$args[0].IsChecked; Save-Settings }
+    $tgl.Add_Checked($onUpd)
+    $tgl.Add_Unchecked($onUpd)
+    [void]$row.FindName('right').Children.Add((New-Btn 'Controlla ora' '' $null { Start-UpdateCheck -Manual; Set-Status 'Controllo aggiornamenti…' 'busy' } 12))
+    [void]$panel.Children.Add($row)
+
     [void]$panel.Children.Add((New-SectionHeader 'Informazioni'))
     $about = New-Row -Icon 0xE946 -Title "WinOptima Portable $script:AppVersion" `
         -Desc ("Suite portatile di ottimizzazione, privacy e pulizia per Windows 10 e 11. Tutto il codice è leggibile in WinOptima.ps1.`nCartella: $script:AppDir")
@@ -2899,7 +3149,7 @@ function Show-Page {
     $ui.PageTitle.Text = $page.Title
     $ui.PageSubtitle.Text = $page.Sub
     $ui.PageHost.Content = $script:PageContent[$Key]
-    $ui.InfoBar.Visibility = 'Collapsed'     # gli avvisi riguardano la pagina in cui sono nati
+    if (-not $script:InfoSticky) { $ui.InfoBar.Visibility = 'Collapsed' }    # gli avvisi riguardano la pagina in cui sono nati
     $ui.HeaderActions.Children.Clear()
     foreach ($b in @($script:HeaderButtons[$Key])) { if ($b) { [void]$ui.HeaderActions.Children.Add($b) } }
     $ui.CommandBar.Visibility = if ($Key -in 'settings', 'net', 'tools', 'apps') { 'Collapsed' } else { 'Visible' }
@@ -2980,16 +3230,14 @@ function Receive-UiMessages {
         switch ($msg.Type) {
             'log'      { Add-LogLine $msg.Time $msg.Level $msg.Text }
             'status'   { Set-Status $msg.Text $msg.Level }
-            'progress' {
-                $ui.WorkProgress.IsIndeterminate = $false
-                $ui.WorkProgress.Maximum = [math]::Max(1, $msg.Max)
-                $ui.WorkProgress.Value = $msg.Value
-            }
+            'progress' { Update-BusyProgress $msg }
             'size'     { if ($script:Controls.ContainsKey($msg.Id) -and $script:Controls[$msg.Id].Size) { $script:Controls[$msg.Id].Size.Text = $msg.Text } }
             'summary'  { Complete-Summary $msg }
             'sysinfo'  { Update-SystemInfo $msg }
             'dns'      { Update-DnsView ([string[]]$msg.Servers) }
             'rdp'      { Update-RdpView ([bool]$msg.Enabled) }
+            'update'   { Receive-UpdateInfo $msg }
+            'updateReady' { Receive-UpdateReady $msg }
         }
     }
 }
@@ -3023,6 +3271,8 @@ $window.Add_Closing({
         if ($answer -ne 'Yes') { $args[1].Cancel = $true; return }
     }
     Save-Settings
+    # Aggiornamento già scaricato: si installa in silenzio alla chiusura (al prossimo avvio parte la nuova versione)
+    if ($script:UpdateReady -and -not $script:Relaunching) { [void](Install-AppUpdate) }
     $timer.Stop()
     if ($script:CpuCounter) { $script:CpuCounter.Dispose() }
 })
@@ -3036,6 +3286,7 @@ $window.Add_Loaded({
     Add-LogLine (Get-Date) 'INFO' "WinOptima Portable $script:AppVersion avviato."
     if ($Sim) { Add-LogLine (Get-Date) 'SIM' 'Modalità simulazione attiva: nessuna modifica verrà scritta nel sistema.' }
     [void](Start-Work -Background -Script { Send-SystemInfo })
+    if ($script:Settings.autoUpdate) { Start-UpdateCheck }
     $timer.Start()
 })
 
