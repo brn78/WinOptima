@@ -11,7 +11,7 @@
 [CmdletBinding()]
 param([switch]$Simulate)
 
-$script:AppVersion = '3.6'
+$script:AppVersion = '3.6.1'
 $script:AppDir = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
 $script:ErrorLog = Join-Path $script:AppDir 'WinOptima-error.log'
 

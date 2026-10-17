@@ -7,10 +7,10 @@ using System.Windows.Forms;
 [assembly: AssemblyTitle("WinOptima Portable")]
 [assembly: AssemblyDescription("Suite portatile di ottimizzazione, privacy e pulizia per Windows 10 e 11")]
 [assembly: AssemblyProduct("WinOptima Portable")]
-[assembly: AssemblyCompany("WinOptima")]
-[assembly: AssemblyCopyright("WinOptima Portable")]
-[assembly: AssemblyVersion("3.5.0.0")]
-[assembly: AssemblyFileVersion("3.5.0.0")]
+[assembly: AssemblyCompany("brn78")]
+[assembly: AssemblyCopyright("© 2026 brn78 · github.com/brn78")]
+[assembly: AssemblyVersion("3.6.1.0")]
+[assembly: AssemblyFileVersion("3.6.1.0")]
 
 namespace WinOptimaLauncher
 {
