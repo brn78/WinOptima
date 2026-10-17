@@ -11,7 +11,7 @@
 [CmdletBinding()]
 param([switch]$Simulate)
 
-$script:AppVersion = '3.6.2'
+$script:AppVersion = '3.7'
 $script:AppDir = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
 $script:ErrorLog = Join-Path $script:AppDir 'WinOptima-error.log'
 
@@ -1270,6 +1270,103 @@ $Engine = {
         $progs = @(Get-PreinstalledPrograms)
         Send-Ui 'bloat' @{ Apps = $apps; Programs = $progs }
     }
+
+    # ---------------------------------------------------------------- driver
+    # Codici di Gestione dispositivi (ConfigManagerErrorCode) più comuni
+    $DeviceErrors = @{
+        1 = 'configurato in modo errato'; 3 = 'driver danneggiato o memoria insufficiente'; 10 = 'impossibile avviare il dispositivo'
+        12 = 'risorse insufficienti'; 14 = 'serve un riavvio'; 18 = 'driver da reinstallare'; 19 = 'configurazione danneggiata'
+        21 = 'in fase di rimozione'; 22 = 'disattivato'; 24 = 'non presente o non funzionante'; 28 = 'driver non installato'
+        29 = 'disattivato dal firmware'; 31 = 'driver non caricato correttamente'; 32 = 'servizio del driver disattivato'
+        37 = 'inizializzazione del driver non riuscita'; 39 = 'driver danneggiato o mancante'; 43 = 'il dispositivo ha segnalato un problema'
+        48 = 'driver bloccato per incompatibilità'; 52 = 'firma digitale del driver non valida'
+    }
+
+    # Riduce un ID hardware alla forma che i siti di driver riconoscono (es. PCI\VEN_10EC&DEV_8168)
+    function Get-ShortHardwareId {
+        param([string]$Id)
+        if (-not $Id) { return '' }
+        foreach ($rx in '^(PCI\\VEN_[0-9A-F]{4}&DEV_[0-9A-F]{4})', '^(USB\\VID_[0-9A-F]{4}&PID_[0-9A-F]{4})',
+            '^(HDAUDIO\\FUNC_[0-9A-F]{2}&VEN_[0-9A-F]{4}&DEV_[0-9A-F]{4})', '^(HID\\VID_[0-9A-F]{4}&PID_[0-9A-F]{4})',
+            '^(BTHENUM\\\{[^}]+\}_VID&[0-9A-F]+_PID&[0-9A-F]+)', '^(ACPI\\VEN_[^&\\]+&DEV_[^&\\]+)', '^(ACPI\\[^\\&]+)') {
+            $m = [regex]::Match($Id, $rx, 'IgnoreCase')
+            if ($m.Success) { return $m.Groups[1].Value.ToUpperInvariant() }
+        }
+        ($Id -replace '&REV_[0-9A-F]+.*$', '').ToUpperInvariant()
+    }
+
+    function Get-DeviceProblems {
+        foreach ($d in @(Get-CimInstance Win32_PnPEntity -ErrorAction SilentlyContinue | Where-Object { $_.ConfigManagerErrorCode -ne 0 -and $_.ConfigManagerErrorCode -ne 45 })) {
+            $ids = @($d.HardwareID) + @($d.CompatibleID) | Where-Object { $_ }
+            $code = [int]$d.ConfigManagerErrorCode
+            @{
+                Name = $(if ($d.Name) { $d.Name } else { 'Dispositivo sconosciuto' }); Class = [string]$d.PNPClass
+                Code = $code; CodeText = $(if ($DeviceErrors.ContainsKey($code)) { $DeviceErrors[$code] } else { 'problema non specificato' })
+                InstanceId = $d.PNPDeviceID; HardwareIds = @($d.HardwareID | Where-Object { $_ }); AllIds = @($ids)
+                ShortId = (Get-ShortHardwareId (@($d.HardwareID)[0]))
+            }
+        }
+    }
+
+    # Ricerca ufficiale dei driver mancanti o più recenti tramite Windows Update (solo lettura)
+    function Find-DriverUpdates {
+        Send-Ui 'status' @{ Text = 'Ricerca dei driver su Windows Update…'; Level = 'busy' }
+        Send-Ui 'progress' @{ Value = 0; Max = 1; Text = 'Interrogo Windows Update (può richiedere un minuto)' }
+        $updates = @()
+        try {
+            $session = New-Object -ComObject Microsoft.Update.Session
+            $searcher = $session.CreateUpdateSearcher()
+            $searcher.Online = $true
+            $res = $searcher.Search("IsInstalled=0 and Type='Driver'")
+            foreach ($u in $res.Updates) {
+                $updates += @{
+                    Id = $u.Identity.UpdateID; Title = $u.Title; HwId = [string]$u.DriverHardwareID
+                    Manufacturer = [string]$u.DriverManufacturer; Class = [string]$u.DriverClass
+                    Date = $(try { ([datetime]$u.DriverVerDate).ToString('dd/MM/yyyy') } catch { '' })
+                    SizeMB = [math]::Round($u.MaxDownloadSize / 1MB, 1)
+                }
+            }
+            Write-Log "Windows Update: $($updates.Count) driver disponibili." 'SUCCESS'
+        } catch { Write-Log "Ricerca su Windows Update non riuscita: $($_.Exception.Message)" 'ERROR' }
+        Send-Ui 'drivers' @{ Problems = @(Get-DeviceProblems); Updates = $updates; Searched = $true }
+    }
+
+    function Install-DriverUpdates {
+        param([string[]]$Ids, [bool]$RestorePoint)
+        Write-Log "--- INSTALLAZIONE DI $($Ids.Count) DRIVER ---"
+        if ($RestorePoint) { Send-Ui 'progress' @{ Value = 0; Max = 3; Text = 'Creazione del punto di ripristino' }; [void](New-RestorePoint) }
+        if (Test-Sim "scarica e installa da Windows Update $($Ids.Count) driver") {
+            Send-Ui 'summary' @{ Ok = $Ids.Count; Fail = 0; Freed = 0; Sim = $true; DriversInstalled = $true }; return
+        }
+        $ok = 0; $fail = 0; $reboot = $false
+        try {
+            $session = New-Object -ComObject Microsoft.Update.Session
+            $searcher = $session.CreateUpdateSearcher(); $searcher.Online = $true
+            Send-Ui 'progress' @{ Value = 1; Max = 3; Text = 'Preparazione dei driver selezionati' }
+            $res = $searcher.Search("IsInstalled=0 and Type='Driver'")
+            $coll = New-Object -ComObject Microsoft.Update.UpdateColl
+            foreach ($u in $res.Updates) {
+                if ($Ids -contains $u.Identity.UpdateID) { if (-not $u.EulaAccepted) { $u.AcceptEula() }; [void]$coll.Add($u) }
+            }
+            if ($coll.Count -eq 0) { throw 'i driver selezionati non sono più disponibili su Windows Update.' }
+            Send-Ui 'progress' @{ Value = 1; Max = 3; Text = "Download di $($coll.Count) driver" }
+            $dl = $session.CreateUpdateDownloader(); $dl.Updates = $coll; [void]$dl.Download()
+            Send-Ui 'progress' @{ Value = 2; Max = 3; Text = "Installazione di $($coll.Count) driver" }
+            $inst = $session.CreateUpdateInstaller(); $inst.Updates = $coll
+            $r = $inst.Install()
+            for ($i = 0; $i -lt $coll.Count; $i++) {
+                $code = $r.GetUpdateResult($i).ResultCode       # 2 = riuscito, 3 = riuscito con errori, 4 = non riuscito, 5 = interrotto
+                if ($code -in 2, 3) { $ok++; Write-Log "Installato: $($coll.Item($i).Title)" 'SUCCESS' }
+                else { $fail++; Write-Log "Non installato (codice $code): $($coll.Item($i).Title)" 'ERROR' }
+            }
+            $reboot = [bool]$r.RebootRequired
+            if ($reboot) { Write-Log 'Per completare l''installazione dei driver serve riavviare il computer.' 'WARN' }
+        } catch { Write-Log "Installazione dei driver non riuscita: $($_.Exception.Message)" 'ERROR'; $fail = [math]::Max($fail, 1) }
+        Send-Ui 'progress' @{ Value = 3; Max = 3; Text = 'Completato' }
+        Send-Ui 'summary' @{ Ok = $ok; Fail = $fail; Freed = 0; Sim = $false; DriversInstalled = $true; Reboot = $reboot }
+    }
+
+    function Send-DriverState { Send-Ui 'drivers' @{ Problems = @(Get-DeviceProblems); Updates = @(); Searched = $false } }
 
     # ---------------------------------------------------------------- aggiornamenti da GitHub
     $UpdateRepo = 'brn78/WinOptima'
@@ -2584,6 +2681,12 @@ function Start-DraftPlan {
 
 function Complete-Summary {
     param($Msg)
+    if ($Msg.DriversInstalled) {
+        $sim = if ($Msg.Sim) { ' (simulazione)' } else { '' }
+        if ($Msg.Fail -eq 0) { Show-Info 'success' "Driver installati$sim" ("$($Msg.Ok) driver installati." + $(if ($Msg.Reboot) { ' Riavvia il computer per completare.' } else { '' })); Set-Status "Driver installati$sim." 'ok' }
+        else { Show-Info 'warning' "Installazione driver con $($Msg.Fail) errori$sim" "$($Msg.Ok) driver installati. Dettagli nel registro attività."; Set-Status 'Installazione driver con errori.' 'warn' }
+        return
+    }
     if ($Msg.AppsRemoved) {
         $sim = if ($Msg.Sim) { ' (simulazione)' } else { '' }
         if ($Msg.Fail -eq 0) { Show-Info 'success' "App rimosse$sim" "$($Msg.Ok) app rimosse senza errori." ; Set-Status "App rimosse$sim." 'ok' }
@@ -3277,6 +3380,135 @@ function Request-UninstallProgram {
     }
 }
 
+# ---------------------------------------------------------------- pagina: Driver
+# Fonti: Windows Update (ufficiale, ricerca e installazione automatiche) + link a DriverPack e al Catalogo
+# Microsoft Update per ID hardware. DriverPack blocca le richieste non da browser: lo si apre nel browser.
+$script:DriverChecks = @()
+$script:DriverUpdates = @()
+$script:DriverSearched = $false
+
+function Get-DriverPackUrl { param([string]$Id) 'https://driverpack.io/it/hwids/' + [uri]::EscapeDataString($Id) }
+function Get-DriverCatalogUrl { param([string]$Id) 'https://www.catalog.update.microsoft.com/Search.aspx?q=' + [uri]::EscapeDataString($Id) }
+
+function Build-DriversPage {
+    $script:DriversPanel = New-Object System.Windows.Controls.StackPanel
+    $refresh = New-Btn 'Aggiorna' '' $null { Update-DriversPage } 0
+    $search = New-Btn 'Cerca driver online' 'AccentButton' $null { Start-DriverSearch } 8
+    $script:HeaderButtons.drivers = @($refresh, $search)
+    $script:DriversPanel
+}
+
+function Update-DriversPage {
+    $script:DriversPanel.Children.Clear()
+    [void]$script:DriversPanel.Children.Add((New-SectionHeader 'Dispositivi con problemi' $true))
+    [void]$script:DriversPanel.Children.Add((New-Caption 'Analisi dei dispositivi…'))
+    [void](Start-Work -Background -Script { Send-DriverState })
+}
+
+function Start-DriverSearch {
+    [void](Start-Work -Status 'Ricerca dei driver su Windows Update…' -Script { Find-DriverUpdates })
+}
+
+function Update-DriverCount {
+    if (-not $script:DriverInstallBtn) { return }
+    $n = @($script:DriverChecks | Where-Object { $_.IsChecked }).Count
+    $script:DriverInstallBtn.Content = if ($n) { "Installa selezionati ($n)" } else { 'Installa selezionati' }
+    $script:DriverInstallBtn.IsEnabled = ($n -gt 0)
+}
+
+function Show-DriverState {
+    param($Msg)
+    if ($Msg.Searched) { $script:DriverUpdates = @($Msg.Updates); $script:DriverSearched = $true }
+    $panel = $script:DriversPanel
+    $panel.Children.Clear()
+    $script:DriverChecks = @()
+    $script:DriverInstallBtn = $null
+    $problems = @($Msg.Problems)
+    $updates = @($script:DriverUpdates)
+
+    # ---- dispositivi con problemi
+    [void]$panel.Children.Add((New-SectionHeader 'Dispositivi con problemi' $true))
+    if (-not $problems.Count) {
+        $ok = New-Row -Icon 0xE930 -Title 'Nessun driver mancante' -Desc 'Gestione dispositivi non segnala problemi: tutti i dispositivi hanno un driver funzionante.'
+        $ok.FindName('glyph').SetResourceReference([System.Windows.Controls.TextBlock]::ForegroundProperty, 'SuccessText')
+        [void]$panel.Children.Add($ok)
+    } else {
+        [void]$panel.Children.Add((New-Caption ("{0} dispositivi con problemi. Usa «Cerca driver online» per farli trovare a Windows Update, oppure cerca l'ID hardware su DriverPack o nel Catalogo Microsoft." -f $problems.Count)))
+        foreach ($p in $problems) {
+            $tags = $TagTemplate.Replace('@FILL@', 'ErrorFill').Replace('@TEXT@', 'ErrorText').Replace('@LABEL@', (Esc $p.CodeText))
+            $match = @($updates | Where-Object { $p.AllIds -contains $_.HwId })
+            if ($match.Count) { $tags += $TagTemplate.Replace('@FILL@', 'SuccessFill').Replace('@TEXT@', 'SuccessText').Replace('@LABEL@', 'Driver disponibile') }
+            $cls = if ($p.Class) { "$($p.Class)  ·  " } else { '' }
+            $row = New-Row -Icon 0xE7BA -Title $p.Name -Tags $tags -Desc ("{0}codice {1}  ·  {2}" -f $cls, $p.Code, $p.ShortId) `
+                -Tip ("ID hardware:`n" + (@($p.HardwareIds) -join "`n"))
+            $right = $row.FindName('right')
+            [void]$right.Children.Add((New-Btn 'DriverPack' '' $p { Open-Url (Get-DriverPackUrl $args[0].Tag.ShortId) } 0))
+            [void]$right.Children.Add((New-Btn 'Catalogo Microsoft' 'SubtleButton' $p { Open-Url (Get-DriverCatalogUrl $args[0].Tag.ShortId) } 6))
+            $copy = New-Btn '' 'SubtleButton' $p {
+                [System.Windows.Clipboard]::SetText($args[0].Tag.ShortId)
+                Set-Status "ID hardware copiato: $($args[0].Tag.ShortId)" 'ok'
+            } 2
+            $copy.Content = ConvertTo-Element '<TextBlock @NS@ Style="{DynamicResource Glyph}" Text="&#xE8C8;" FontSize="14"/>'
+            $copy.Padding = New-Object System.Windows.Thickness (10, 7, 10, 7)
+            $copy.ToolTip = 'Copia l''ID hardware'
+            [System.Windows.Automation.AutomationProperties]::SetName($copy, "Copia l'ID hardware di $($p.Name)")
+            [void]$right.Children.Add($copy)
+            [void]$panel.Children.Add($row)
+        }
+    }
+
+    # ---- driver disponibili su Windows Update
+    [void]$panel.Children.Add((New-SectionHeader 'Driver disponibili su Windows Update'))
+    if (-not $script:DriverSearched) {
+        [void]$panel.Children.Add((New-Caption 'Premi «Cerca driver online»: Windows Update (fonte ufficiale Microsoft) controlla quali driver mancanti o più recenti esistono per il tuo hardware. Richiede circa un minuto.'))
+    } elseif (-not $updates.Count) {
+        $none = New-Row -Icon 0xE930 -Title 'Nessun driver da installare' -Desc 'Windows Update non ha driver da proporre: quelli installati sono già i più adatti al tuo hardware.'
+        $none.FindName('glyph').SetResourceReference([System.Windows.Controls.TextBlock]::ForegroundProperty, 'SuccessText')
+        [void]$panel.Children.Add($none)
+    } else {
+        [void]$panel.Children.Add((New-Caption ("{0} driver disponibili. Spunta quelli da installare: vengono scaricati da Microsoft e installati da Windows." -f $updates.Count)))
+        $act = New-Row -Icon 0xE896 -Title 'Installa i driver selezionati' -Desc 'Prima dell''installazione puoi creare un punto di ripristino. Alcuni driver richiedono un riavvio.'
+        $script:DriverInstallBtn = New-Btn 'Installa selezionati' 'AccentButton' $null { Request-InstallDrivers } 0
+        [void]$act.FindName('right').Children.Add($script:DriverInstallBtn)
+        [void]$panel.Children.Add($act)
+        foreach ($u in $updates) {
+            $isFix = [bool]@($problems | Where-Object { $_.AllIds -contains $u.HwId }).Count
+            $tags = if ($isFix) { $TagTemplate.Replace('@FILL@', 'SuccessFill').Replace('@TEXT@', 'SuccessText').Replace('@LABEL@', 'Risolve un problema') } else { '' }
+            $meta = @($u.Manufacturer, $u.Class, $u.Date, $(if ($u.SizeMB) { "$($u.SizeMB) MB" })) | Where-Object { $_ }
+            $row = New-Row -Icon 0xE950 -Title $u.Title -Tags $tags -Desc (($meta -join '  ·  ') + "  ·  $($u.HwId)") `
+                -Right '<CheckBox x:Name="ctl" VerticalAlignment="Center" Margin="14,0,0,0"/>'
+            $chk = $row.FindName('ctl'); $chk.Tag = $u; $chk.IsChecked = $isFix
+            $chk.Add_Checked({ Update-DriverCount }); $chk.Add_Unchecked({ Update-DriverCount })
+            $row.Tag = $chk
+            $row.Add_MouseLeftButtonUp({ $c = $args[0].Tag; $c.IsChecked = -not [bool]$c.IsChecked })
+            $script:DriverChecks += $chk
+            [void]$panel.Children.Add($row)
+        }
+        Update-DriverCount
+    }
+
+    # ---- strumenti
+    [void]$panel.Children.Add((New-SectionHeader 'Strumenti'))
+    $dm = New-Row -Icon 0xE950 -Title 'Gestione dispositivi' -Desc 'Tutti i dispositivi del PC, con driver, proprietà e ID hardware.'
+    [void]$dm.FindName('right').Children.Add((New-Btn 'Apri' 'SubtleButton' $null { Open-Tool 'devmgmt.msc' } 0))
+    [void]$panel.Children.Add($dm)
+}
+
+function Request-InstallDrivers {
+    $sel = @($script:DriverChecks | Where-Object { $_.IsChecked } | ForEach-Object { $_.Tag })
+    if (-not $sel.Count) { return }
+    $script:DriversToInstall = $sel
+    Show-Dialog -Title "Installare $($sel.Count) driver?" `
+        -Body 'Verranno scaricati da Windows Update (fonte ufficiale Microsoft) e installati, accettando i relativi termini di licenza. Potrebbe servire un riavvio.' `
+        -Items @($sel | ForEach-Object { "▸  $($_.Title)" }) `
+        -CheckText 'Crea prima un punto di ripristino' -CheckValue $true `
+        -Primary 'Installa' -Secondary 'Annulla' -OnPrimary {
+        [void](Start-Work -Status 'Installazione dei driver…' -Vars @{ Ids = @($script:DriversToInstall | ForEach-Object { $_.Id }); Rp = [bool]$script:DlgChecked } `
+                -Script { Install-DriverUpdates -Ids $Ids -RestorePoint $Rp } `
+                -OnDone { $script:DriverUpdates = @(); $script:DriverSearched = $false; if ($script:CurrentPage -eq 'drivers') { Update-DriversPage } })
+    }
+}
+
 # ---------------------------------------------------------------- pagina: Impostazioni
 $script:ThemeButtons = @{}
 
@@ -3363,6 +3595,7 @@ $PageDefs = @(
     @{ Key = 'ui';       Title = 'Personalizzazione'; Icon = 0xE771; Sub = 'Esplora file, barra delle applicazioni e menu Start.' },
     @{ Key = 'apps';     Title = 'Avvio e notifiche'; Icon = 0xE768; Sub = 'App che partono con Windows e icone visibili nell''area di notifica.' },
     @{ Key = 'bloat';    Title = 'App preinstallate'; Icon = 0xE8A9; Sub = 'Rimuovi app e programmi installati in fabbrica che non usi.' },
+    @{ Key = 'drivers';  Title = 'Driver';            Icon = 0xE964; Sub = 'Trova i driver mancanti per ID hardware e installali da Windows Update.' },
     @{ Key = 'clean';    Title = 'Pulizia';           Icon = 0xE74D; Sub = 'Recupera spazio eliminando cache, dump e file temporanei.' },
     @{ Key = 'net';      Title = 'Rete';              Icon = 0xE774; Sub = 'Desktop remoto, DNS veloci e riparazione della connessione.' },
     @{ Key = 'tools';    Title = 'Strumenti';         Icon = 0xE90F; Sub = 'Punti di ripristino, verifica dei file di sistema e manutenzione.' },
@@ -3383,9 +3616,10 @@ function Show-Page {
     if (-not $script:InfoSticky) { $ui.InfoBar.Visibility = 'Collapsed' }    # gli avvisi riguardano la pagina in cui sono nati
     $ui.HeaderActions.Children.Clear()
     foreach ($b in @($script:HeaderButtons[$Key])) { if ($b) { [void]$ui.HeaderActions.Children.Add($b) } }
-    $ui.CommandBar.Visibility = if ($Key -in 'settings', 'net', 'tools', 'apps', 'bloat') { 'Collapsed' } else { 'Visible' }
+    $ui.CommandBar.Visibility = if ($Key -in 'settings', 'net', 'tools', 'apps', 'bloat', 'drivers') { 'Collapsed' } else { 'Visible' }
     if ($Key -eq 'apps') { Update-AppsPage }
     if ($Key -eq 'bloat') { Update-BloatPage }
+    if ($Key -eq 'drivers') { Update-DriversPage }
     $ui.BtnSelectAll.Visibility = if ($Key -eq 'home') { 'Collapsed' } else { 'Visible' }
     $ui.BtnSelectAll.ToolTip = "Seleziona tutte le voci della pagina «$($PagesByKey[$Key].Title)»"
     $ui.PageScroll.ScrollToTop()
@@ -3448,6 +3682,7 @@ $script:PageContent.net = Build-NetPage
 $script:PageContent.tools = Build-ToolsPage
 $script:PageContent.apps = Build-AppsPage
 $script:PageContent.bloat = Build-BloatPage
+$script:PageContent.drivers = Build-DriversPage
 $script:PageContent.settings = Build-SettingsPage
 
 # ---------------------------------------------------------------- pulsanti della barra dei comandi
@@ -3502,6 +3737,7 @@ function Receive-UiMessages {
             'rdp'      { Update-RdpView ([bool]$msg.Enabled) }
             'update'   { Receive-UpdateInfo $msg }
             'bloat'    { Show-BloatState $msg }
+            'drivers'  { Show-DriverState $msg }
             'updateReady' { Receive-UpdateReady $msg }
         }
     }

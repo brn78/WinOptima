@@ -16,6 +16,12 @@ Fai doppio clic su **`WinOptima.exe`**: chiede l'elevazione UAC, estrae il progr
 
 Per lo sviluppo si può anche avviare lo script direttamente (`WinOptima.bat` oppure `WinOptima.ps1`). Per provare l'app senza rischi: `powershell -ExecutionPolicy Bypass -File .\WinOptima.ps1 -Simulate` (non servono i privilegi di amministratore e **non viene modificato nulla**).
 
+## 🆕 Novità della versione 3.7
+* Nuova pagina **Driver**:
+  * **Dispositivi con problemi** (driver mancante, non avviato, firma non valida…) presi da Gestione dispositivi, con l'**ID hardware** già ridotto alla forma che i siti riconoscono (es. `PCI\VEN_10EC&DEV_8168`). Per ognuno puoi aprire la pagina di **DriverPack** con versione e data del driver, cercare nel **Catalogo Microsoft Update** o copiare l'ID.
+  * **Cerca driver online**: Windows Update, la fonte ufficiale, verifica quali driver mancanti o più recenti esistono per il tuo hardware. Quelli che risolvono un problema sono già spuntati; *Installa selezionati* li scarica e li installa, con punto di ripristino facoltativo.
+  * Nota: DriverPack si apre nel browser per consultare i driver. Il programma DriverPack Solution non è necessario ed è noto per proporre software aggiuntivo durante l'installazione.
+
 ## 🆕 Novità della versione 3.6
 * Logo **GitHub** in fondo al menu (e in *Impostazioni → Informazioni*): un clic apre il profilo [github.com/brn78](https://github.com/brn78). Accanto c'è anche il link al sito del progetto.
 
