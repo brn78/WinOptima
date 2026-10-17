@@ -1,0 +1,7 @@
+# Copia della versione 2.0 tenuta solo in locale
+_backup-originale/
+
+# File creati dall'app durante l'uso
+WinOptima.settings.json
+WinOptima-error.log
+Backup/

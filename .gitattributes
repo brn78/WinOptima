@@ -1,0 +1,7 @@
+# Gli script devono restare UTF-8 con BOM e CRLF (Windows PowerShell 5.1): nessuna conversione
+*.ps1 -text
+*.bat -text
+*.cs  -text
+*.exe binary
+*.ico binary
+*.png binary

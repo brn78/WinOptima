@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WinOptima Portable</title>
+<meta name="description" content="Ottimizzatore portatile per Windows 10 e 11 con interfaccia in stile Windows 11: prestazioni, privacy, pulizia, app di avvio. Tutto reversibile, un solo file .exe.">
+<link rel="icon" type="image/png" href="assets/icon.png">
+<style>
+  :root {
+    --bg: #f3f3f3; --bg-grad: radial-gradient(1200px 600px at 85% -10%, #d6ecff 0%, transparent 60%), radial-gradient(900px 500px at -10% 20%, #fff2cc 0%, transparent 55%);
+    --card: rgba(255,255,255,.75); --card-strong: #ffffff; --stroke: rgba(0,0,0,.08);
+    --text: rgba(0,0,0,.9); --text-2: rgba(0,0,0,.62); --accent: #005fb8; --accent-text: #fff;
+    --yellow: #f5a524; --shadow: 0 8px 30px rgba(0,0,0,.08); --code: rgba(0,0,0,.05);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #1c1c1c; --bg-grad: radial-gradient(1200px 600px at 85% -10%, #0f3a5c 0%, transparent 60%), radial-gradient(900px 500px at -10% 20%, #3a2f12 0%, transparent 55%);
+      --card: rgba(255,255,255,.05); --card-strong: #2b2b2b; --stroke: rgba(255,255,255,.08);
+      --text: #fff; --text-2: rgba(255,255,255,.72); --accent: #60cdff; --accent-text: #000;
+      --yellow: #ffd13d; --shadow: 0 8px 30px rgba(0,0,0,.35); --code: rgba(255,255,255,.07);
+    }
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0; background: var(--bg); background-image: var(--bg-grad); background-attachment: fixed;
+    color: var(--text); font: 16px/1.6 "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
+  }
+  a { color: var(--accent); }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 16px; }
+  nav { display: flex; align-items: center; gap: 12px; padding: 18px 0; }
+  nav img { width: 34px; height: 34px; }
+  nav b { font-size: 18px; }
+  nav .sp { flex: 1; }
+  nav a.gh { color: var(--text-2); text-decoration: none; font-size: 15px; }
+  nav a.gh:hover { color: var(--text); }
+
+  .hero { display: grid; grid-template-columns: 1.05fr 1fr; gap: 40px; align-items: center; padding: 40px 0 56px; }
+  .hero h1 { font-family: "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif; font-size: clamp(36px, 6vw, 58px); line-height: 1.05; margin: 0 0 18px; letter-spacing: -.5px; }
+  .hero h1 .bolt { color: var(--yellow); }
+  .hero p.lead { font-size: 19px; color: var(--text-2); margin: 0 0 28px; max-width: 520px; }
+  .btns { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+  .btn { display: inline-flex; align-items: center; gap: 10px; padding: 12px 22px; border-radius: 6px; font-weight: 600; text-decoration: none; border: 1px solid var(--stroke); transition: transform .12s ease, filter .12s ease; }
+  .btn:hover { transform: translateY(-1px); filter: brightness(1.06); }
+  .btn.primary { background: var(--accent); color: var(--accent-text); border-color: transparent; }
+  .btn.ghost { background: var(--card); color: var(--text); }
+  .small { font-size: 13px; color: var(--text-2); margin-top: 12px; }
+  .shot { border-radius: 10px; border: 1px solid var(--stroke); box-shadow: var(--shadow); width: 100%; display: block; }
+  .hero .shot { transform: perspective(1400px) rotateY(-6deg) rotateX(2deg); }
+
+  section { padding: 44px 0; }
+  h2 { font-family: "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif; font-size: 32px; margin: 0 0 8px; }
+  .sub { color: var(--text-2); margin: 0 0 28px; font-size: 17px; }
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+  .card { background: var(--card); border: 1px solid var(--stroke); border-radius: 8px; padding: 22px; backdrop-filter: blur(20px); }
+  .card .e { font-size: 28px; line-height: 1; }
+  .card h3 { margin: 12px 0 6px; font-size: 18px; }
+  .card p { margin: 0; color: var(--text-2); font-size: 15px; }
+
+  .gallery { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  figure { margin: 0; }
+  figcaption { color: var(--text-2); font-size: 14px; margin-top: 8px; text-align: center; }
+
+  .steps { counter-reset: s; display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+  .step { position: relative; padding-top: 52px; }
+  .step::before { counter-increment: s; content: counter(s); position: absolute; top: 18px; left: 22px; width: 28px; height: 28px; border-radius: 50%; background: var(--accent); color: var(--accent-text); display: grid; place-items: center; font-weight: 700; font-size: 14px; }
+
+  details { background: var(--card); border: 1px solid var(--stroke); border-radius: 8px; padding: 16px 20px; margin-bottom: 10px; }
+  summary { cursor: pointer; font-weight: 600; font-size: 17px; }
+  details p { color: var(--text-2); margin: 10px 0 0; }
+  code { background: var(--code); padding: 2px 6px; border-radius: 4px; font-family: "Cascadia Mono", Consolas, monospace; font-size: 14px; }
+
+  .cta { text-align: center; background: var(--card); border: 1px solid var(--stroke); border-radius: 12px; padding: 44px 20px; }
+  .cta h2 { margin-bottom: 10px; }
+  footer { color: var(--text-2); font-size: 14px; text-align: center; padding: 36px 0 48px; }
+
+  @media (max-width: 860px) {
+    .hero { grid-template-columns: 1fr; gap: 28px; padding-top: 16px; }
+    .hero .shot { transform: none; }
+    .grid, .steps { grid-template-columns: 1fr; }
+    .gallery { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <nav>
+    <img src="assets/icon.png" alt="">
+    <b>WinOptima</b>
+    <span class="sp"></span>
+    <a class="gh" href="https://github.com/brn78/WinOptima">GitHub ↗</a>
+  </nav>
+
+  <header class="hero">
+    <div>
+      <h1>Il tuo Windows,<br>ma più <span class="bolt">sveglio</span> ⚡</h1>
+      <p class="lead">WinOptima è l'ottimizzatore portatile che ha l'aspetto di Windows 11 e il carattere di un amico premuroso: velocizza, ripulisce e protegge la privacy, ma ti chiede sempre prima e sa tornare indietro.</p>
+      <div class="btns">
+        <a class="btn primary" href="https://github.com/brn78/WinOptima/releases/latest/download/WinOptima.exe">⬇ Scarica WinOptima.exe</a>
+        <a class="btn ghost" href="#come-funziona">Come funziona</a>
+      </div>
+      <p class="small">Un solo file da circa 330 KB · Windows 10 e 11 · niente installazione · gratis</p>
+    </div>
+    <img class="shot" src="assets/home-dark.png" alt="La Home di WinOptima: CPU, memoria e disco in tempo reale, ottimizzazioni attive e azioni rapide">
+  </header>
+
+  <section>
+    <h2>Cosa sa fare</h2>
+    <p class="sub">42 interruttori e operazioni, divisi come nelle Impostazioni di Windows. Nessuna magia nera: ogni voce dice cosa tocca.</p>
+    <div class="grid">
+      <div class="card"><div class="e">⚡</div><h3>Prestazioni</h3><p>Menu istantanei, avvio senza attese, arresto rapido, piano energetico al massimo, addio Game DVR.</p></div>
+      <div class="card"><div class="e">🛡️</div><h3>Privacy</h3><p>Telemetria al minimo, niente ID pubblicitario, ricerca Start solo locale, aggiornamenti senza P2P.</p></div>
+      <div class="card"><div class="e">🎨</div><h3>Personalizzazione</h3><p>Menu contestuale classico, estensioni visibili, barra a sinistra, icone del desktop e molto altro.</p></div>
+      <div class="card"><div class="e">▶️</div><h3>Avvio e notifiche</h3><p>Decidi chi parte con Windows (o eliminalo, con copia di sicurezza) e quali icone restano sulla barra.</p></div>
+      <div class="card"><div class="e">🧹</div><h3>Pulizia</h3><p>Prima ti dice quanto spazio puoi recuperare, poi pulisce temporanei, cache, dump e Cestino. Su un PC di prova: 11 GB.</p></div>
+      <div class="card"><div class="e">🌐</div><h3>Rete e strumenti</h3><p>DNS veloci in un clic, Desktop remoto, riparazione rete, SFC, DISM e scorciatoie a tutti gli strumenti di sistema.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Bello da usare (sì, ci teniamo)</h2>
+    <p class="sub">Mica, tema chiaro o scuro automatico, il colore di accento del tuo Windows. Sembra un'app di sistema, perché si comporta come tale.</p>
+    <div class="gallery">
+      <figure><img class="shot" src="assets/perf-dark.png" alt="Pagina Prestazioni con interruttori in stile Windows 11" loading="lazy"><figcaption>Interruttori che mostrano lo stato reale del sistema</figcaption></figure>
+      <figure><img class="shot" src="assets/dialog-dark.png" alt="Dialogo di conferma con elenco delle modifiche e punto di ripristino" loading="lazy"><figcaption>Prima di toccare qualcosa ti mostra l'elenco esatto</figcaption></figure>
+      <figure><img class="shot" src="assets/clean-dark.png" alt="Pagina Pulizia con analisi dello spazio recuperabile" loading="lazy"><figcaption>«Analizza spazio»: sai quanto liberi prima di cancellare</figcaption></figure>
+      <figure><img class="shot" src="assets/perf-light.png" alt="Pagina Personalizzazione in tema chiaro" loading="lazy"><figcaption>Anche in tema chiaro, ovviamente</figcaption></figure>
+    </div>
+  </section>
+
+  <section>
+    <h2>Coraggioso, non spericolato</h2>
+    <p class="sub">Un ottimizzatore deve far dormire sonni tranquilli. Ecco come.</p>
+    <div class="grid">
+      <div class="card"><div class="e">↩️</div><h3>Tutto reversibile</h3><p>Spegni l'interruttore e premi Applica: tornano i valori originali di Windows.</p></div>
+      <div class="card"><div class="e">🧪</div><h3>Modalità simulazione</h3><p>Prova tutto a vuoto: il registro attività racconta cosa farebbe, senza fare nulla.</p></div>
+      <div class="card"><div class="e">💾</div><h3>Punto di ripristino</h3><p>Una spunta nel dialogo di conferma e Windows salva il suo stato prima di procedere.</p></div>
+      <div class="card"><div class="e">🔍</div><h3>Niente segreti</h3><p>Passa il mouse su una voce per vedere le chiavi di registro. Tutto il codice è su GitHub.</p></div>
+      <div class="card"><div class="e">🚧</div><h3>Zone vietate</h3><p>La pulizia si rifiuta di toccare radici di unità, cartella Windows, profilo utente e programmi.</p></div>
+      <div class="card"><div class="e">🧯</div><h3>Errori isolati</h3><p>Se una voce fallisce lo dice chiaramente e passa alla successiva, senza fermare tutto.</p></div>
+    </div>
+  </section>
+
+  <section id="come-funziona">
+    <h2>Come funziona</h2>
+    <p class="sub">Tre passi, zero installazioni.</p>
+    <div class="steps">
+      <div class="card step"><h3>Scarica e avvia</h3><p>Doppio clic su <code>WinOptima.exe</code> e conferma il prompt di Windows (serve l'amministratore per modificare il sistema).</p></div>
+      <div class="card step"><h3>Scegli</h3><p>Accendi ciò che ti serve, oppure premi <b>Preset consigliato</b> per le ottimizzazioni sicure.</p></div>
+      <div class="card step"><h3>Applica</h3><p>Controlla l'elenco, conferma, e guarda il registro attività lavorare per te. ☕</p></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Domande frequenti</h2>
+    <details><summary>Windows dice «Windows ha protetto il PC». È un virus?</summary>
+      <p>No: l'exe non è firmato digitalmente (un certificato costa caro) e SmartScreen non lo conosce ancora. Clicca <b>Ulteriori informazioni → Esegui comunque</b>. Se preferisci, puoi leggere e avviare direttamente <code>WinOptima.ps1</code> dal repository.</p></details>
+    <details><summary>Mi rompe il PC?</summary>
+      <p>Fa solo modifiche note e documentate, tutte reversibili, e ti chiede conferma prima. Se vuoi la massima tranquillità, attiva la modalità simulazione o crea un punto di ripristino dal dialogo di conferma.</p></details>
+    <details><summary>Dove finiscono i file?</summary>
+      <p>L'exe si estrae in <code>%LOCALAPPDATA%\WinOptima</code>, dove tiene anche preferenze e copie di sicurezza. Per disinstallare: cancella l'exe e quella cartella. Fine.</p></details>
+    <details><summary>Ho eliminato un programma dall'avvio per sbaglio!</summary>
+      <p>Niente panico: in <code>%LOCALAPPDATA%\WinOptima\Backup\Avvio</code> trovi un file <code>.reg</code> (doppio clic per ripristinarlo) oppure il collegamento originale.</p></details>
+    <details><summary>Funziona su Windows 10?</summary>
+      <p>Sì. Le voci esclusive di Windows 11 vengono nascoste e, al posto dell'effetto Mica, c'è uno sfondo a tinta unita.</p></details>
+  </section>
+
+  <section>
+    <div class="cta">
+      <h2>Pronto a dare una sveglia al tuo PC?</h2>
+      <p class="sub">Gratis, portatile, senza pubblicità e senza raccolta dati. Ironico, per un'app che toglie la telemetria.</p>
+      <div class="btns" style="justify-content:center">
+        <a class="btn primary" href="https://github.com/brn78/WinOptima/releases/latest/download/WinOptima.exe">⬇ Scarica WinOptima.exe</a>
+        <a class="btn ghost" href="https://github.com/brn78/WinOptima">Guarda il codice</a>
+      </div>
+    </div>
+  </section>
+
+  <footer>Fatto con ☕, PowerShell e un po' di pignoleria · <a href="https://github.com/brn78/WinOptima/releases">Tutte le versioni</a></footer>
+</div>
+</body>
+</html>
