@@ -11,7 +11,7 @@
 [CmdletBinding()]
 param([switch]$Simulate)
 
-$script:AppVersion = '3.6.1'
+$script:AppVersion = '3.6.2'
 $script:AppDir = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
 $script:ErrorLog = Join-Path $script:AppDir 'WinOptima-error.log'
 
@@ -2575,7 +2575,6 @@ function Start-DraftPlan {
     $script:Settings.restorePoint = $script:DlgChecked
     Save-Settings
     $script:LastSteps = $steps
-    Set-LogOpen $true
     [void](Start-Work -Status 'Applicazione in corso…' -Vars @{
             Steps = @($steps | ForEach-Object { @{ Id = $_.Id; Mode = $_.Mode } })
             RestorePoint = [bool]$script:DlgChecked
@@ -2793,12 +2792,10 @@ function Invoke-QuickClean {
 }
 
 function Invoke-RestorePoint {
-    Set-LogOpen $true
     [void](Start-Work -Status 'Creazione del punto di ripristino…' -Script { [void](New-RestorePoint) })
 }
 
 function Invoke-RestartExplorer {
-    Set-LogOpen $true
     [void](Start-Work -Status 'Riavvio di Esplora risorse…' -Script { Restart-Explorer })
 }
 
@@ -2807,7 +2804,6 @@ function Build-CleanPage {
     $panel = Build-ItemPage 'clean'
     $analyze = New-Btn 'Analizza spazio' '' $null {
         $ids = @($Catalog.Values | Where-Object { $_.Kind -eq 'action' -and $_.Paths } | ForEach-Object { $_.Id })
-        Set-LogOpen $true
         [void](Start-Work -Status 'Analisi dello spazio recuperabile…' -Vars @{ Ids = $ids } -Script { Measure-CleanSpace -Ids $Ids })
     } 0
     $now = New-Btn 'Pulisci ora' 'AccentButton' $null { Request-Apply 'clean' } 8
@@ -2850,11 +2846,9 @@ function Build-NetPage {
     $script:RdpPill = @{ Border = $row.FindName('rdpPill'); Text = $row.FindName('rdpText') }
     $right = $row.FindName('right')
     [void]$right.Children.Add((New-Btn 'Abilita' 'AccentButton' $null {
-                Set-LogOpen $true
                 [void](Start-Work -Status 'Abilitazione di Desktop remoto…' -Script { Set-RemoteDesktop $true })
             } 0))
     [void]$right.Children.Add((New-Btn 'Disabilita' '' $null {
-                Set-LogOpen $true
                 [void](Start-Work -Status 'Disabilitazione di Desktop remoto…' -Script { Set-RemoteDesktop $false })
             }))
     [void]$panel.Children.Add($row)
@@ -2873,7 +2867,6 @@ function Build-NetPage {
         $r = New-Row -Icon 0xE774 -Title $preset.Name -Tags $pillXaml -Desc ("{0}  ·  {1}" -f $preset.Desc, ($preset.Servers -join '  /  '))
         $btn = New-Btn 'Imposta' '' $preset {
             $p = $args[0].Tag
-            Set-LogOpen $true
             [void](Start-Work -Status "Imposto il DNS $($p.Name)…" -Vars @{ Servers = $p.Servers; Name = $p.Name } -Script { Set-DnsPreset -Servers $Servers -Name $Name })
         } 0
         [void]$r.FindName('right').Children.Add($btn)
@@ -2882,7 +2875,6 @@ function Build-NetPage {
     }
     $auto = New-Row -Icon 0xE72C -Title 'Automatico (DHCP)' -Desc 'Ripristina i server DNS assegnati dal router o dal provider.'
     [void]$auto.FindName('right').Children.Add((New-Btn 'Ripristina' '' $null {
-                Set-LogOpen $true
                 [void](Start-Work -Status 'Ripristino del DNS automatico…' -Script { Reset-DnsAuto })
             } 0))
     [void]$panel.Children.Add($auto)
@@ -2894,7 +2886,6 @@ function Build-NetPage {
                 Show-Dialog -Title 'Ripristinare la rete?' `
                     -Body 'Winsock e lo stack TCP/IP torneranno alle impostazioni originali. La connessione potrebbe interrompersi e servirà un riavvio del computer.' `
                     -Primary 'Ripristina' -Secondary 'Annulla' -OnPrimary {
-                    Set-LogOpen $true
                     [void](Start-Work -Status 'Ripristino della rete…' -Script { Reset-NetworkStack })
                 }
             } 0))
@@ -2908,7 +2899,7 @@ function Open-Tool {
     try {
         if ($Sim) { Write-Log "Avvierebbe: $File $Arguments" 'SIM'; return }
         if ($Arguments) { Start-Process $File -ArgumentList $Arguments -ErrorAction Stop } else { Start-Process $File -ErrorAction Stop }
-    } catch { Write-Log "Impossibile aprire ${File}: $($_.Exception.Message)" 'ERROR'; Set-LogOpen $true }
+    } catch { Write-Log "Impossibile aprire ${File}: $($_.Exception.Message)" 'ERROR'; Set-Status "Impossibile aprire $File (dettagli nel registro)." 'error' }
 }
 
 function Build-ToolsPage {
@@ -2923,13 +2914,13 @@ function Build-ToolsPage {
     $r = New-Row -Icon 0xE73E -Title 'Verifica i file di sistema (SFC)' `
         -Desc 'Scansiona i file protetti di Windows e sostituisce quelli danneggiati. Si apre una finestra con l''avanzamento.'
     [void]$r.FindName('right').Children.Add((New-Btn 'Avvia scansione' '' $null {
-                Write-Log 'Avvio della scansione SFC in una finestra dedicata.'; Set-LogOpen $true; Open-Tool 'cmd.exe' '/k sfc /scannow'
+                Write-Log 'Avvio della scansione SFC in una finestra dedicata.'; Open-Tool 'cmd.exe' '/k sfc /scannow'
             } 0))
     [void]$panel.Children.Add($r)
     $r = New-Row -Icon 0xE90F -Title 'Ripara l''archivio componenti (DISM)' `
         -Desc 'Scarica da Windows Update i file originali per riparare l''immagine del sistema (DISM /RestoreHealth).'
     [void]$r.FindName('right').Children.Add((New-Btn 'Avvia riparazione' '' $null {
-                Write-Log 'Avvio della riparazione DISM in una finestra dedicata.'; Set-LogOpen $true; Open-Tool 'cmd.exe' '/k DISM /Online /Cleanup-Image /RestoreHealth'
+                Write-Log 'Avvio della riparazione DISM in una finestra dedicata.'; Open-Tool 'cmd.exe' '/k DISM /Online /Cleanup-Image /RestoreHealth'
             } 0))
     [void]$panel.Children.Add($r)
     $r = New-Row -Icon 0xE895 -Title 'Ripristina Windows Update' `
@@ -2938,7 +2929,6 @@ function Build-ToolsPage {
                 Show-Dialog -Title 'Ripristinare Windows Update?' `
                     -Body 'I servizi di aggiornamento verranno fermati e riavviati e i download già scaricati saranno eliminati.' `
                     -Primary 'Ripristina' -Secondary 'Annulla' -OnPrimary {
-                    Set-LogOpen $true
                     [void](Start-Work -Status 'Ripristino di Windows Update…' -Script { Reset-WindowsUpdate })
                 }
             } 0))
@@ -3255,7 +3245,6 @@ function Request-RemoveApps {
         -CheckText 'Impedisci la reinstallazione automatica per i nuovi utenti' -CheckValue ([bool]$script:Settings.deprovision) `
         -Primary 'Rimuovi' -Secondary 'Annulla' -OnPrimary {
         $script:Settings.deprovision = $script:DlgChecked; Save-Settings
-        Set-LogOpen $true
         [void](Start-Work -Status 'Rimozione delle app…' -Vars @{ Apps = $script:AppsToRemove; Dep = [bool]$script:DlgChecked } `
                 -Script { Remove-Apps -Apps $Apps -Deprovision $Dep } -OnDone { if ($script:CurrentPage -eq 'bloat') { Update-BloatPage } })
     }
@@ -3276,7 +3265,6 @@ function Request-UninstallProgram {
             $rest = if ($cmd.StartsWith('"')) { $cmd.Substring($cmd.IndexOf('"', 1) + 1) } else { $cmd.Substring([math]::Min($cmd.Length, $file.Length)) }
             $arg = $rest.Trim()
         }
-        Set-LogOpen $true
         if ($Sim) { Write-Log "Avvierebbe: $file $arg" 'SIM'; return }
         try {
             if ($arg) { Start-Process -FilePath $file -ArgumentList $arg -ErrorAction Stop } else { Start-Process -FilePath $file -ErrorAction Stop }
