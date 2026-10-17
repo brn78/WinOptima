@@ -11,7 +11,7 @@
 [CmdletBinding()]
 param([switch]$Simulate)
 
-$script:AppVersion = '3.2'
+$script:AppVersion = '3.3'
 $script:AppDir = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
 $script:ErrorLog = Join-Path $script:AppDir 'WinOptima-error.log'
 
@@ -569,6 +569,13 @@ $Engine = {
             Remove-RegValue 'HKLM:\SOFTWARE\Policies\Microsoft\Dsh' 'AllowNewsAndInterests'
             try { if ($null -ne (Get-RegValue $KeyAdv 'TaskbarDa')) { Set-RegValue $KeyAdv 'TaskbarDa' 1 } } catch { <# protetta da UCPD #> }
         }
+    }
+    Register-Item @{
+        Id = 'hideSearch'; Page = 'ui'; Group = 'Barra delle applicazioni'; Icon = 0xE721; Explorer = $true
+        Title = 'Nascondi «Cerca» dalla barra'
+        Desc  = 'Toglie casella o icona di ricerca: per cercare basta aprire Start e iniziare a scrivere.'
+        Tip   = 'HKCU\Software\Microsoft\Windows\CurrentVersion\Search\SearchboxTaskbarMode = 0 (ripristino: casella di ricerca)'
+        Reg   = @(@{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Search'; Name = 'SearchboxTaskbarMode'; On = 0; Off = 2 })
     }
     Register-Item @{
         Id = 'taskView'; Page = 'ui'; Group = 'Barra delle applicazioni'; Icon = 0xE7C4; Explorer = $true
@@ -3154,6 +3161,8 @@ function Show-Page {
     foreach ($b in @($script:HeaderButtons[$Key])) { if ($b) { [void]$ui.HeaderActions.Children.Add($b) } }
     $ui.CommandBar.Visibility = if ($Key -in 'settings', 'net', 'tools', 'apps') { 'Collapsed' } else { 'Visible' }
     if ($Key -eq 'apps') { Update-AppsPage }
+    $ui.BtnSelectAll.Visibility = if ($Key -eq 'home') { 'Collapsed' } else { 'Visible' }
+    $ui.BtnSelectAll.ToolTip = "Seleziona tutte le voci della pagina «$($PagesByKey[$Key].Title)»"
     $ui.PageScroll.ScrollToTop()
     if (-not $script:NavButtons[$Key].IsChecked) { $script:NavButtons[$Key].IsChecked = $true }
     if ($Key -eq 'home') { Update-HomeLive }
@@ -3192,7 +3201,10 @@ $script:PageContent.settings = Build-SettingsPage
 # ---------------------------------------------------------------- pulsanti della barra dei comandi
 $ui.BtnPreset.Add_Click({ Set-Preset; Write-Log 'Selezionate le ottimizzazioni consigliate: controlla e premi Applica.' })
 $ui.BtnSelectAll.Add_Click({
-    foreach ($id in @($script:Controls.Keys)) { $script:Controls[$id].Ctl.IsChecked = $true }
+    # Solo la pagina visibile: selezionare voci di altre pagine senza vederle sarebbe una sorpresa
+    foreach ($id in @($script:Controls.Keys)) {
+        if ($Catalog[$id].Page -eq $script:CurrentPage) { $script:Controls[$id].Ctl.IsChecked = $true }
+    }
     Update-Pending
 })
 $ui.BtnReset.Add_Click({
