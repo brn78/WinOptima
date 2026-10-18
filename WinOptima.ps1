@@ -11,7 +11,7 @@
 [CmdletBinding()]
 param([switch]$Simulate)
 
-$script:AppVersion = '3.7.2'
+$script:AppVersion = '3.8'
 $script:AppDir = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
 $script:ErrorLog = Join-Path $script:AppDir 'WinOptima-error.log'
 
@@ -1269,6 +1269,171 @@ $Engine = {
         $apps = @(Get-RemovableApps)
         $progs = @(Get-PreinstalledPrograms)
         Send-Ui 'bloat' @{ Apps = $apps; Programs = $progs }
+    }
+
+    # ---------------------------------------------------------------- pulizia del registro
+    # Approccio prudente: si segnalano solo voci che puntano a file o cartelle che non esistono più
+    # (resti di programmi disinstallati). Prima di correggere, le chiavi vengono esportate in un .reg.
+    $RegScanRoots = @{
+        SharedDlls   = @('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\SharedDLLs', 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\SharedDLLs')
+        AppPaths     = @('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths', 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\App Paths', 'HKCU:\Software\Microsoft\Windows\CurrentVersion\App Paths')
+        Uninstall    = @('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall', 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall', 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall')
+        Run          = @('HKCU:\Software\Microsoft\Windows\CurrentVersion\Run', 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run', 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Run')
+        MuiCache     = @('HKCU:\Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\MuiCache')
+        InstallerDirs = @('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Installer\Folders')
+        Applications = @('HKCU:\Software\Classes\Applications')
+    }
+    $RegCategories = [ordered]@{
+        SharedDlls = 'DLL condivise mancanti'; AppPaths = 'Percorsi delle applicazioni non validi'
+        Uninstall = 'Programmi di disinstallazione orfani'; Run = 'Voci di avvio non valide'
+        MuiCache = 'Cache dei nomi delle app'; InstallerDirs = 'Cartelle di installazione mancanti'; Applications = 'Associazioni «Apri con» non valide'
+    }
+
+    # $true solo se il percorso è assoluto e sicuramente assente (i comandi senza percorso non si giudicano)
+    function Test-PathMissing {
+        param([string]$Path)
+        if ([string]::IsNullOrWhiteSpace($Path)) { return $false }
+        $x = [Environment]::ExpandEnvironmentVariables($Path.Trim().Trim('"'))
+        if ($x -match '%' -or $x.IndexOfAny([IO.Path]::GetInvalidPathChars()) -ge 0) { return $false }
+        try {
+            if (-not [IO.Path]::IsPathRooted($x) -or $x.StartsWith('\\')) { return $false }     # niente percorsi di rete
+            if (Test-Path -LiteralPath $x) { return $false }
+            # I programmi a 32 bit scrivono «system32» ma Windows li reindirizza in SysWOW64: va controllato anche lì
+            $wow = $x -replace '(?i)\\system32\\', '\SysWOW64\' -replace '(?i)\\sysnative\\', '\System32\'
+            if ($wow -ne $x -and (Test-Path -LiteralPath $wow)) { return $false }
+            $true
+        } catch { $false }
+    }
+
+    function Find-RegistryIssues {
+        param([hashtable]$Roots = $RegScanRoots)
+        $issues = New-Object System.Collections.ArrayList
+        $add = { param($cat, $key, $value, $name, $target) [void]$issues.Add(@{ Category = $cat; Key = $key; Value = $value; Name = $name; Target = $target }) }
+        $i = 0
+        foreach ($cat in $RegCategories.Keys) {
+            Send-Ui 'progress' @{ Value = $i; Max = $RegCategories.Count; Text = "Controllo: $($RegCategories[$cat])" }
+            $i++
+            foreach ($root in @($Roots[$cat])) {
+                if (-not $root -or -not (Test-Path -LiteralPath $root)) { continue }
+                try {
+                    switch ($cat) {
+                        { $_ -in 'SharedDlls', 'InstallerDirs' } {
+                            # il nome del valore è il percorso del file/cartella
+                            foreach ($n in (Get-Item -LiteralPath $root).GetValueNames()) {
+                                if ($n -and (Test-PathMissing $n)) { & $add $cat $root $n (Split-Path $n -Leaf) $n }
+                            }
+                        }
+                        'MuiCache' {
+                            foreach ($n in (Get-Item -LiteralPath $root).GetValueNames()) {
+                                $p = $n -replace '\.(FriendlyAppName|ApplicationCompany)$', ''
+                                if ($p -ne $n -and (Test-PathMissing $p)) { & $add $cat $root $n (Split-Path $p -Leaf) $p }
+                            }
+                        }
+                        'Run' {
+                            $k = Get-Item -LiteralPath $root
+                            foreach ($n in $k.GetValueNames()) {
+                                if (-not $n) { continue }
+                                $exe = Get-ExePath ([string]$k.GetValue($n))
+                                if (Test-PathMissing $exe) { & $add $cat $root $n $n $exe }
+                            }
+                        }
+                        'AppPaths' {
+                            foreach ($sk in @(Get-ChildItem -LiteralPath $root -ErrorAction SilentlyContinue)) {
+                                $exe = Get-ExePath ([string]$sk.GetValue(''))
+                                if (Test-PathMissing $exe) { & $add $cat $sk.PSPath.Replace('Microsoft.PowerShell.Core\Registry::', '') $null $sk.PSChildName $exe }
+                            }
+                        }
+                        'Uninstall' {
+                            foreach ($sk in @(Get-ChildItem -LiteralPath $root -ErrorAction SilentlyContinue)) {
+                                $cmd = [string]$sk.GetValue('UninstallString')
+                                if (-not $cmd -or $cmd -match '(?i)msiexec') { continue }
+                                $exe = Get-ExePath $cmd
+                                if (Test-PathMissing $exe) {
+                                    $dn = [string]$sk.GetValue('DisplayName'); if (-not $dn) { $dn = $sk.PSChildName }
+                                    & $add $cat $sk.PSPath.Replace('Microsoft.PowerShell.Core\Registry::', '') $null $dn $exe
+                                }
+                            }
+                        }
+                        'Applications' {
+                            foreach ($sk in @(Get-ChildItem -LiteralPath $root -ErrorAction SilentlyContinue)) {
+                                $cmdKey = Join-Path $sk.PSPath 'shell\open\command'
+                                if (-not (Test-Path -LiteralPath $cmdKey)) { continue }
+                                $exe = Get-ExePath ([string](Get-Item -LiteralPath $cmdKey).GetValue(''))
+                                if (Test-PathMissing $exe) { & $add $cat $sk.PSPath.Replace('Microsoft.PowerShell.Core\Registry::', '') $null $sk.PSChildName $exe }
+                            }
+                        }
+                    }
+                } catch { Write-Log "Registro, ${cat}: $($_.Exception.Message)" 'WARN' }
+            }
+        }
+        $issues.ToArray()
+    }
+
+    function Send-RegistryScan {
+        $issues = @(Find-RegistryIssues)
+        Write-Log "Analisi del registro: $($issues.Count) voci non valide." 'SUCCESS'
+        Send-Ui 'regscan' @{ Issues = $issues }
+    }
+
+    # Converte un percorso PowerShell del registro in (radice .NET, sottochiave, percorso per reg.exe)
+    function Split-RegPath {
+        param([string]$Path)
+        $p = $Path -replace '^Registry::', '' -replace '^HKEY_LOCAL_MACHINE', 'HKLM:' -replace '^HKEY_CURRENT_USER', 'HKCU:'
+        if ($p -match '^(HKLM|HKCU):\\?(.*)$') {
+            $hive = if ($Matches[1] -eq 'HKLM') { [Microsoft.Win32.Registry]::LocalMachine } else { [Microsoft.Win32.Registry]::CurrentUser }
+            return @{ Hive = $hive; Sub = $Matches[2]; Native = "$($Matches[1])\$($Matches[2])" }
+        }
+        throw "Percorso di registro non supportato: $Path"
+    }
+
+    function Repair-RegistryIssues {
+        param([object[]]$Issues)
+        Write-Log "--- CORREZIONE DI $($Issues.Count) VOCI DEL REGISTRO ---"
+        if (Test-Sim "esporta un backup .reg e rimuove $($Issues.Count) voci del registro non valide") {
+            Send-Ui 'summary' @{ Ok = $Issues.Count; Fail = 0; Freed = 0; Sim = $true; RegistryFixed = $true }; return
+        }
+        # 1) backup: ogni chiave coinvolta esportata (una volta sola) in un unico file .reg ripristinabile
+        $dir = Get-BackupDir 'Registro'
+        $backup = Join-Path $dir ("{0} registro.reg" -f (Get-Date -Format 'yyyyMMdd-HHmmss'))
+        $sb = New-Object System.Text.StringBuilder
+        [void]$sb.Append("Windows Registry Editor Version 5.00`r`n")
+        $tmp = Join-Path $env:TEMP 'winoptima-regexp.reg'
+        $keys = @($Issues | ForEach-Object { $_.Key } | Select-Object -Unique)
+        $n = 0
+        foreach ($k in $keys) {
+            $n++
+            Send-Ui 'progress' @{ Value = $n; Max = $keys.Count + 1; Text = 'Backup delle chiavi' }
+            $native = (Split-RegPath $k).Native
+            $null = & reg.exe export $native $tmp /y 2>&1
+            if ($LASTEXITCODE -eq 0) {
+                $txt = [IO.File]::ReadAllText($tmp)
+                [void]$sb.Append(($txt -replace '^﻿?Windows Registry Editor Version 5\.00\r?\n', ''))
+            }
+        }
+        [IO.File]::WriteAllText($backup, $sb.ToString(), [Text.Encoding]::Unicode)
+        Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
+        Write-Log "Backup del registro salvato in: $backup" 'SUCCESS'
+
+        # 2) correzione (API .NET: i nomi dei valori possono contenere caratteri che i cmdlet interpretano come jolly)
+        $ok = 0; $fail = 0
+        Send-Ui 'progress' @{ Value = $keys.Count; Max = $keys.Count + 1; Text = 'Rimozione delle voci non valide' }
+        foreach ($is in $Issues) {
+            try {
+                $r = Split-RegPath $is.Key
+                if ($null -ne $is.Value) {
+                    $sk = $r.Hive.OpenSubKey($r.Sub, $true)
+                    if ($sk) { $sk.DeleteValue($is.Value, $false); $sk.Close() }
+                } else {
+                    $parentPath = Split-Path $r.Sub -Parent; $leaf = Split-Path $r.Sub -Leaf
+                    $pk = $r.Hive.OpenSubKey($parentPath, $true)
+                    if ($pk) { $pk.DeleteSubKeyTree($leaf, $false); $pk.Close() }
+                }
+                $ok++
+            } catch { $fail++; Write-Log "$($is.Name): $($_.Exception.Message)" 'ERROR' }
+        }
+        Write-Log "Registro: $ok voci rimosse." 'SUCCESS'
+        Send-Ui 'progress' @{ Value = $keys.Count + 1; Max = $keys.Count + 1; Text = 'Completato' }
+        Send-Ui 'summary' @{ Ok = $ok; Fail = $fail; Freed = 0; Sim = $false; RegistryFixed = $true; Backup = $backup }
     }
 
     # ---------------------------------------------------------------- driver
@@ -2687,6 +2852,14 @@ function Start-DraftPlan {
 
 function Complete-Summary {
     param($Msg)
+    if ($Msg.RegistryFixed) {
+        $sim = if ($Msg.Sim) { ' (simulazione)' } else { '' }
+        if ($Msg.Fail -eq 0) {
+            Show-Info 'success' "Registro corretto$sim" ("$($Msg.Ok) voci rimosse." + $(if ($Msg.Backup) { " Backup: $($Msg.Backup)" } else { '' })) -ActionText 'Apri backup' -OnAction { Open-RegistryBackups }
+            Set-Status "Registro corretto$sim." 'ok'
+        } else { Show-Info 'warning' "Registro corretto con $($Msg.Fail) errori$sim" "$($Msg.Ok) voci rimosse. Dettagli nel registro attività."; Set-Status 'Registro corretto con errori.' 'warn' }
+        return
+    }
     if ($Msg.DriversInstalled) {
         $sim = if ($Msg.Sim) { ' (simulazione)' } else { '' }
         if ($Msg.Fail -eq 0) { Show-Info 'success' "Driver installati$sim" ("$($Msg.Ok) driver installati." + $(if ($Msg.Reboot) { ' Riavvia il computer per completare.' } else { '' })); Set-Status "Driver installati$sim." 'ok' }
@@ -2917,7 +3090,82 @@ function Build-CleanPage {
     } 0
     $now = New-Btn 'Pulisci ora' 'AccentButton' $null { Request-Apply 'clean' } 8
     $script:HeaderButtons.clean = @($analyze, $now)
+
+    # ---- registro di sistema (stile CCleaner, ma solo voci verso file/programmi che non esistono più)
+    [void]$panel.Children.Add((New-SectionHeader 'Registro di sistema'))
+    $intro = New-Row -Icon 0xE9F5 -Title 'Voci di registro non valide' `
+        -Desc 'Cerca riferimenti a file e programmi che non esistono più: DLL condivise, percorsi delle app, disinstallazioni orfane, avvio, cache dei nomi, «Apri con». Prima di correggere viene salvato un backup .reg.'
+    [void]$intro.FindName('right').Children.Add((New-Btn 'Backup' 'SubtleButton' $null { Open-RegistryBackups } 0))
+    [void]$intro.FindName('right').Children.Add((New-Btn 'Analizza registro' '' $null {
+                [void](Start-Work -Status 'Analisi del registro…' -Script { Send-RegistryScan })
+            } 6))
+    [void]$panel.Children.Add($intro)
+    $script:RegPanel = New-Object System.Windows.Controls.StackPanel
+    [void]$panel.Children.Add($script:RegPanel)
     $panel
+}
+
+function Open-RegistryBackups {
+    foreach ($d in @((Join-Path $script:AppDir 'Backup\Registro'), (Join-Path $env:LOCALAPPDATA 'WinOptima\Backup\Registro'))) {
+        if (Test-Path -LiteralPath $d) { Start-Process explorer.exe -ArgumentList "`"$d`""; return }
+    }
+    Show-Info 'info' 'Nessun backup del registro' 'I backup vengono creati automaticamente la prima volta che correggi il registro.'
+}
+
+$script:RegChecks = @()
+
+function Update-RegFixButton {
+    if (-not $script:RegFixBtn) { return }
+    $n = 0; foreach ($c in $script:RegChecks) { if ($c.IsChecked) { $n += @($c.Tag.Issues).Count } }
+    $script:RegFixBtn.Content = if ($n) { "Correggi selezionate ($n)" } else { 'Correggi selezionate' }
+    $script:RegFixBtn.IsEnabled = ($n -gt 0)
+}
+
+function Show-RegistryScan {
+    param($Msg)
+    $panel = $script:RegPanel
+    $panel.Children.Clear()
+    $script:RegChecks = @(); $script:RegFixBtn = $null
+    $issues = @($Msg.Issues)
+    if (-not $issues.Count) {
+        $ok = New-Row -Icon 0xE930 -Title 'Registro pulito' -Desc 'Nessuna voce punta a file o programmi inesistenti.'
+        $ok.FindName('glyph').SetResourceReference([System.Windows.Controls.TextBlock]::ForegroundProperty, 'SuccessText')
+        [void]$panel.Children.Add($ok)
+        return
+    }
+    [void]$panel.Children.Add((New-Caption ("{0} voci non valide trovate. Sono resti di programmi disinstallati: rimuoverle è sicuro e viene comunque salvato un backup." -f $issues.Count)))
+    foreach ($cat in $RegCategories.Keys) {
+        $list = @($issues | Where-Object { $_.Category -eq $cat })
+        if (-not $list.Count) { continue }
+        $examples = (@($list | Select-Object -First 3 | ForEach-Object { $_.Name }) -join ', ') + $(if ($list.Count -gt 3) { ', …' } else { '' })
+        $tip = (@($list | Select-Object -First 40 | ForEach-Object { "$($_.Name)  →  $($_.Target)" }) -join "`n") + $(if ($list.Count -gt 40) { "`n… e altre $($list.Count - 40)" } else { '' })
+        $row = New-Row -Icon 0xE9F5 -Title ("{0} ({1})" -f $RegCategories[$cat], $list.Count) -Desc $examples -Tip $tip `
+            -Right '<CheckBox x:Name="ctl" VerticalAlignment="Center" Margin="14,0,0,0" IsChecked="True"/>'
+        $chk = $row.FindName('ctl'); $chk.Tag = @{ Category = $cat; Issues = $list }
+        $chk.Add_Checked({ Update-RegFixButton }); $chk.Add_Unchecked({ Update-RegFixButton })
+        $row.Tag = $chk
+        $row.Add_MouseLeftButtonUp({ $c = $args[0].Tag; $c.IsChecked = -not [bool]$c.IsChecked })
+        $script:RegChecks += $chk
+        [void]$panel.Children.Add($row)
+    }
+    $act = New-Row -Icon 0xE90F -Title 'Correggi le voci selezionate' -Desc 'Prima viene esportato un backup .reg: aprendolo con doppio clic ripristini tutto com''era.'
+    $script:RegFixBtn = New-Btn 'Correggi selezionate' 'AccentButton' $null { Request-FixRegistry } 0
+    [void]$act.FindName('right').Children.Add($script:RegFixBtn)
+    [void]$panel.Children.Add($act)
+    Update-RegFixButton
+}
+
+function Request-FixRegistry {
+    $sel = @(); foreach ($c in $script:RegChecks) { if ($c.IsChecked) { $sel += @($c.Tag.Issues) } }
+    if (-not $sel.Count) { return }
+    $script:RegToFix = $sel
+    $lines = foreach ($c in $script:RegChecks) { if ($c.IsChecked) { "✓  $($RegCategories[$c.Tag.Category]): $(@($c.Tag.Issues).Count)" } }
+    Show-Dialog -Title "Correggere $($sel.Count) voci del registro?" `
+        -Body 'Le chiavi coinvolte vengono prima esportate in un file .reg nella cartella Backup\Registro: aprendolo con doppio clic si ripristina tutto.' `
+        -Items @($lines) -Primary 'Correggi' -Secondary 'Annulla' -OnPrimary {
+        [void](Start-Work -Status 'Correzione del registro…' -Vars @{ Issues = $script:RegToFix } -Script { Repair-RegistryIssues -Issues $Issues } `
+                -OnDone { [void](Start-Work -Background -Script { Send-RegistryScan }) })
+    }
 }
 
 # ---------------------------------------------------------------- pagina: Rete
@@ -3772,6 +4020,7 @@ function Receive-UiMessages {
             'update'   { Receive-UpdateInfo $msg }
             'bloat'    { Show-BloatState $msg }
             'drivers'  { Show-DriverState $msg }
+            'regscan'  { Show-RegistryScan $msg }
             'updateReady' { Receive-UpdateReady $msg }
         }
     }
