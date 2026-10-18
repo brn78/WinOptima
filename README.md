@@ -16,6 +16,9 @@ Fai doppio clic su **`WinOptima.exe`**: chiede l'elevazione UAC, estrae il progr
 
 Per lo sviluppo si può anche avviare lo script direttamente (`WinOptima.bat` oppure `WinOptima.ps1`). Per provare l'app senza rischi: `powershell -ExecutionPolicy Bypass -File .\WinOptima.ps1 -Simulate` (non servono i privilegi di amministratore e **non viene modificato nulla**).
 
+## 🆕 Novità della versione 3.7.1
+* **Rete → Nascondi l'avviso sui file .rdp non firmati**: niente più finestra «Attenzione: connessione remota sconosciuta» introdotta dall'aggiornamento di aprile 2026. Usa l'impostazione documentata `RedirectionWarningDialogVersion = 1`, più `RdpLaunchConsentAccepted = 1` per l'avviso del primo avvio. Da usare solo verso PC che conosci: l'avviso protegge dai file .rdp di phishing, e Microsoft potrebbe rimuovere questa opzione in futuro. In alternativa, firmando i file .rdp l'avviso sparisce senza disattivare la protezione.
+
 ## 🆕 Novità della versione 3.7
 * Nuova pagina **Driver**:
   * **Dispositivi con problemi** (driver mancante, non avviato, firma non valida…) presi da Gestione dispositivi, con l'**ID hardware** già ridotto alla forma che i siti riconoscono (es. `PCI\VEN_10EC&DEV_8168`). Per ognuno puoi aprire la pagina di **DriverPack** con versione e data del driver, cercare nel **Catalogo Microsoft Update** o copiare l'ID.

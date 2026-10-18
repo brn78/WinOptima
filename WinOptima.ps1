@@ -11,7 +11,7 @@
 [CmdletBinding()]
 param([switch]$Simulate)
 
-$script:AppVersion = '3.7'
+$script:AppVersion = '3.7.1'
 $script:AppDir = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
 $script:ErrorLog = Join-Path $script:AppDir 'WinOptima-error.log'
 
@@ -2956,6 +2956,33 @@ function Build-NetPage {
             }))
     [void]$panel.Children.Add($row)
 
+    # Avviso «Connessione remota sconosciuta» dei file .rdp non firmati (aggiornamento di aprile 2026).
+    # Impostazione documentata da Microsoft, che potrebbe toglierla in futuro.
+    $warn = $TagTemplate.Replace('@FILL@', 'WarnFill').Replace('@TEXT@', 'WarnText').Replace('@LABEL@', 'Avanzato')
+    $row = New-Row -Icon 0xE7BA -Title 'Nascondi l''avviso sui file .rdp non firmati' -Tags $warn -Right $ToggleXaml `
+        -Desc 'Apre i file .rdp senza la finestra «Attenzione: connessione remota sconosciuta». Usalo solo per connessioni verso PC che conosci e controlli: l''avviso protegge dai file .rdp di phishing.' `
+        -Tip "HKLM\Software\Policies\Microsoft\Windows NT\Terminal Services\Client\RedirectionWarningDialogVersion = 1`nHKCU\Software\Microsoft\Terminal Server Client\RdpLaunchConsentAccepted = 1"
+    $tgl = $row.FindName('tgl')
+    $tgl.IsChecked = ((Get-RegValue $KeyRdpClientPolicy 'RedirectionWarningDialogVersion') -eq 1)
+    [System.Windows.Automation.AutomationProperties]::SetName($tgl, 'Nascondi l''avviso sui file .rdp non firmati')
+    $onRdpWarn = {
+        $t = $args[0]
+        Invoke-ToggleAction $t {
+            if ($t.IsChecked) {
+                Set-RegValue $KeyRdpClientPolicy 'RedirectionWarningDialogVersion' 1
+                Set-RegValue 'HKCU:\Software\Microsoft\Terminal Server Client' 'RdpLaunchConsentAccepted' 1
+                Write-Log 'Avviso dei file .rdp non firmati disattivato: vale dal prossimo file .rdp aperto.' 'SUCCESS'
+            } else {
+                Remove-RegValue $KeyRdpClientPolicy 'RedirectionWarningDialogVersion'
+                Remove-RegValue 'HKCU:\Software\Microsoft\Terminal Server Client' 'RdpLaunchConsentAccepted'
+                Write-Log 'Avviso dei file .rdp non firmati riattivato.' 'SUCCESS'
+            }
+        }
+    }
+    $tgl.Add_Checked($onRdpWarn)
+    $tgl.Add_Unchecked($onRdpWarn)
+    [void]$panel.Children.Add($row)
+
     [void]$panel.Children.Add((New-SectionHeader 'Server DNS'))
     $cap = New-Object System.Windows.Controls.TextBlock
     $cap.Margin = New-Object System.Windows.Thickness (2, 0, 0, 8)
@@ -3086,6 +3113,7 @@ function Build-ToolsPage {
 $script:IconCache = @{}
 $script:SuppressToggle = $false
 $KeyExplorer = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer'
+$KeyRdpClientPolicy = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services\Client'
 
 function Get-AppIconImage {
     param([string]$Path)
