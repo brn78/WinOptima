@@ -11,7 +11,7 @@
 [CmdletBinding()]
 param([switch]$Simulate)
 
-$script:AppVersion = '3.8'
+$script:AppVersion = '3.8.1'
 $script:AppDir = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
 $script:ErrorLog = Join-Path $script:AppDir 'WinOptima-error.log'
 
@@ -1077,9 +1077,12 @@ $Engine = {
     }
 
     # Cartella delle copie di sicurezza: accanto all'app, oppure in %LOCALAPPDATA% se il supporto è in sola lettura
+    # Nota: nel runspace di lavoro $script:AppDir non esiste; arriva come $AppDir (Start-Work) e, in ogni caso,
+    # si ripiega su %LOCALAPPDATA%\WinOptima, che è anche la cartella in cui l'exe estrae l'app.
     function Get-BackupDir {
         param([string]$Sub)
-        foreach ($base in @((Join-Path $script:AppDir 'Backup'), (Join-Path $env:LOCALAPPDATA 'WinOptima\Backup'))) {
+        $bases = foreach ($d in @($script:AppDir, $global:AppDir, (Join-Path $env:LOCALAPPDATA 'WinOptima'))) { if ($d) { Join-Path $d 'Backup' } }
+        foreach ($base in @($bases | Select-Object -Unique)) {
             try {
                 $d = Join-Path $base $Sub
                 if (-not (Test-Path -LiteralPath $d)) { New-Item -ItemType Directory -Path $d -Force -ErrorAction Stop | Out-Null }
@@ -1393,26 +1396,36 @@ $Engine = {
             Send-Ui 'summary' @{ Ok = $Issues.Count; Fail = 0; Freed = 0; Sim = $true; RegistryFixed = $true }; return
         }
         # 1) backup: ogni chiave coinvolta esportata (una volta sola) in un unico file .reg ripristinabile
-        $dir = Get-BackupDir 'Registro'
-        $backup = Join-Path $dir ("{0} registro.reg" -f (Get-Date -Format 'yyyyMMdd-HHmmss'))
-        $sb = New-Object System.Text.StringBuilder
-        [void]$sb.Append("Windows Registry Editor Version 5.00`r`n")
-        $tmp = Join-Path $env:TEMP 'winoptima-regexp.reg'
+        # Regola: senza backup non si tocca nulla. Una chiave che non si riesce a esportare resta com'è.
         $keys = @($Issues | ForEach-Object { $_.Key } | Select-Object -Unique)
-        $n = 0
-        foreach ($k in $keys) {
-            $n++
-            Send-Ui 'progress' @{ Value = $n; Max = $keys.Count + 1; Text = 'Backup delle chiavi' }
-            $native = (Split-RegPath $k).Native
-            $null = & reg.exe export $native $tmp /y 2>&1
-            if ($LASTEXITCODE -eq 0) {
-                $txt = [IO.File]::ReadAllText($tmp)
-                [void]$sb.Append(($txt -replace '^﻿?Windows Registry Editor Version 5\.00\r?\n', ''))
+        $saved = @{}
+        try {
+            $dir = Get-BackupDir 'Registro'
+            $backup = Join-Path $dir ("{0} registro.reg" -f (Get-Date -Format 'yyyyMMdd-HHmmss'))
+            $sb = New-Object System.Text.StringBuilder
+            [void]$sb.Append("Windows Registry Editor Version 5.00`r`n")
+            $tmp = Join-Path $env:TEMP 'winoptima-regexp.reg'
+            $n = 0
+            foreach ($k in $keys) {
+                $n++
+                Send-Ui 'progress' @{ Value = $n; Max = $keys.Count + 1; Text = 'Backup delle chiavi' }
+                $native = (Split-RegPath $k).Native
+                $null = & reg.exe export $native $tmp /y 2>&1
+                if ($LASTEXITCODE -eq 0) {
+                    $txt = [IO.File]::ReadAllText($tmp)
+                    [void]$sb.Append(($txt -replace '^﻿?Windows Registry Editor Version 5\.00\r?\n', ''))
+                    $saved[$k] = $true
+                } else { Write-Log "Backup non riuscito per ${native}: la chiave non verrà modificata." 'WARN' }
             }
+            [IO.File]::WriteAllText($backup, $sb.ToString(), [Text.Encoding]::Unicode)
+            Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
+            Write-Log "Backup del registro salvato in: $backup" 'SUCCESS'
+        } catch {
+            Write-Log "Backup del registro non riuscito ($($_.Exception.Message)): nessuna voce è stata modificata." 'ERROR'
+            Send-Ui 'summary' @{ Ok = 0; Fail = $Issues.Count; Freed = 0; Sim = $false; RegistryFixed = $true }
+            return
         }
-        [IO.File]::WriteAllText($backup, $sb.ToString(), [Text.Encoding]::Unicode)
-        Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
-        Write-Log "Backup del registro salvato in: $backup" 'SUCCESS'
+        $Issues = @($Issues | Where-Object { $saved.ContainsKey($_.Key) })
 
         # 2) correzione (API .NET: i nomi dei valori possono contenere caratteri che i cmdlet interpretano come jolly)
         $ok = 0; $fail = 0
@@ -2731,6 +2744,7 @@ function Start-Work {
     $rs.Open()
     $rs.SessionStateProxy.SetVariable('UiQueue', $UiQueue)
     $rs.SessionStateProxy.SetVariable('Sim', [bool]$Sim)
+    $rs.SessionStateProxy.SetVariable('AppDir', $script:AppDir)    # serve al motore (es. cartella dei backup)
     foreach ($k in $Vars.Keys) { $rs.SessionStateProxy.SetVariable($k, $Vars[$k]) }
     $ps = [powershell]::Create()
     $ps.Runspace = $rs
@@ -4059,6 +4073,14 @@ $window.Add_Closing({
     if ($script:UpdateReady -and -not $script:Relaunching) { [void](Install-AppUpdate) }
     $timer.Stop()
     if ($script:CpuCounter) { $script:CpuCounter.Dispose() }
+})
+
+# Primo fotogramma disegnato: chiude lo splash del launcher e porta la finestra in primo piano
+$window.Add_ContentRendered({
+    if ($env:WINOPTIMA_READY) {
+        try { $h = [System.Threading.EventWaitHandle]::OpenExisting($env:WINOPTIMA_READY); [void]$h.Set(); $h.Dispose() } catch {}
+    }
+    [void]$window.Activate()
 })
 
 $window.Add_Loaded({

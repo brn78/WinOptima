@@ -178,6 +178,7 @@ $cscArgs = @(
     "/win32icon:$icoPath",
     "/win32manifest:$(Join-Path $root 'app.manifest')",
     '/reference:System.Windows.Forms.dll',
+    '/reference:System.Drawing.dll',
     # Script e icona dentro l'exe: un unico file portatile che si estrae in %LOCALAPPDATA%\WinOptima
     "/resource:$(Join-Path $root 'WinOptima.ps1'),WinOptima.ps1",
     "/resource:$icoPath,WinOptima.ico",

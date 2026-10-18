@@ -16,6 +16,10 @@ Fai doppio clic su **`WinOptima.exe`**: chiede l'elevazione UAC, estrae il progr
 
 Per lo sviluppo si può anche avviare lo script direttamente (`WinOptima.bat` oppure `WinOptima.ps1`). Per provare l'app senza rischi: `powershell -ExecutionPolicy Bypass -File .\WinOptima.ps1 -Simulate` (non servono i privilegi di amministratore e **non viene modificato nulla**).
 
+## 🆕 Novità della versione 3.8.1
+* **Schermata di avvio**: appena lanci l'exe compare una piccola finestra con logo e barra di avanzamento, che resta finché l'interfaccia è pronta. Niente più finestra vuota per alcuni secondi.
+* **Correzione**: la pulizia del registro non riusciva a creare il backup («Nessuna cartella scrivibile per la copia di sicurezza») e quindi si fermava senza modificare nulla. Ora il backup viene salvato in `%LOCALAPPDATA%\WinOptima\Backup\Registro`. Se in futuro il backup non riuscisse, la correzione si ferma con un messaggio chiaro e senza toccare il registro.
+
 ## 🆕 Novità della versione 3.8
 * **Pulizia del registro** (Pulizia → Registro di sistema), sullo stile di CCleaner ma prudente: segnala solo voci che puntano a **file o programmi che non esistono più**. Le categorie sono: DLL condivise mancanti, percorsi delle applicazioni, programmi di disinstallazione orfani, voci di avvio, cache dei nomi delle app, cartelle di installazione, associazioni «Apri con». Risultati raggruppati per categoria, con l'elenco completo al passaggio del mouse.
 * Prima di ogni correzione le chiavi vengono **esportate in un file .reg** (`Backup\Registro`): un doppio clic ripristina tutto. Componenti COM/ActiveX ed estensioni di sistema non vengono mai toccati: il guadagno sarebbe nullo e il rischio no. I percorsi `system32` dei programmi a 32 bit vengono verificati anche in `SysWOW64` per evitare falsi positivi.
