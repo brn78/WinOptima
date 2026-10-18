@@ -9,8 +9,8 @@ using System.Windows.Forms;
 [assembly: AssemblyProduct("WinOptima Portable")]
 [assembly: AssemblyCompany("brn78")]
 [assembly: AssemblyCopyright("© 2026 brn78 · github.com/brn78")]
-[assembly: AssemblyVersion("3.7.0.0")]
-[assembly: AssemblyFileVersion("3.7.0.0")]
+[assembly: AssemblyVersion("3.7.2.0")]
+[assembly: AssemblyFileVersion("3.7.2.0")]
 
 namespace WinOptimaLauncher
 {
@@ -33,6 +33,25 @@ namespace WinOptimaLauncher
 
                 string scriptPath = Extract("WinOptima.ps1", appDir);
                 Extract("WinOptima.ico", appDir);
+
+                // Dopo un aggiornamento la versione precedente resta come «<nome>.old.exe»: la si elimina
+                // in background, riprovando finché il vecchio processo non è terminato (max ~30 s)
+                string exePath = Application.ExecutablePath;
+                string oldExe = Path.Combine(Path.GetDirectoryName(exePath),
+                    Path.GetFileNameWithoutExtension(exePath) + ".old.exe");
+                if (File.Exists(oldExe))
+                {
+                    System.Threading.Thread cleaner = new System.Threading.Thread(() =>
+                    {
+                        for (int i = 0; i < 30 && File.Exists(oldExe); i++)
+                        {
+                            try { File.Delete(oldExe); }
+                            catch { System.Threading.Thread.Sleep(1000); }
+                        }
+                    });
+                    cleaner.IsBackground = true;
+                    cleaner.Start();
+                }
 
                 // Senza risorse incorporate (build di sviluppo) usa lo script accanto all'exe
                 if (scriptPath == null)

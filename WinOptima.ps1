@@ -11,7 +11,7 @@
 [CmdletBinding()]
 param([switch]$Simulate)
 
-$script:AppVersion = '3.7.1'
+$script:AppVersion = '3.7.2'
 $script:AppDir = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
 $script:ErrorLog = Join-Path $script:AppDir 'WinOptima-error.log'
 
@@ -1943,12 +1943,12 @@ $WindowXaml = @'
 
         <!-- Pagina corrente -->
         <ScrollViewer x:Name="PageScroll" Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="0,0,0,0">
-          <ContentControl x:Name="PageHost" Margin="36,8,36,20" MaxWidth="1000" IsTabStop="False"/>
+          <ContentControl x:Name="PageHost" Margin="36,8,36,20" IsTabStop="False"/>
         </ScrollViewer>
 
         <!-- Barra dei comandi (modifiche in sospeso) -->
         <Border x:Name="CommandBar" Grid.Row="2" Style="{StaticResource Card}" CornerRadius="8" Padding="12,8"
-                Margin="36,4,36,12" MaxWidth="1000">
+                Margin="36,4,36,12">
           <Grid>
             <Grid.ColumnDefinitions>
               <ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/>
@@ -1958,7 +1958,7 @@ $WindowXaml = @'
               <Button x:Name="BtnSelectAll" Content="Seleziona tutto" Margin="0,0,8,0"/>
               <Button x:Name="BtnReset" Content="Annulla modifiche" Style="{StaticResource SubtleButton}"/>
             </StackPanel>
-            <TextBlock x:Name="PendingText" Grid.Column="1" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="12,0,16,0"
+            <TextBlock x:Name="PendingText" Grid.Column="1" HorizontalAlignment="Stretch" TextAlignment="Right" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" Margin="12,0,16,0"
                        Style="{StaticResource TxtSecondary}"/>
             <Button x:Name="BtnApply" Grid.Column="2" Content="Applica" Style="{StaticResource AccentButton}" MinWidth="120" FontWeight="SemiBold"/>
           </Grid>
@@ -2402,7 +2402,7 @@ $ui.InfoAction.Add_Click({ if ($script:InfoOnAction) { & $script:InfoOnAction } 
 
 # ---------------------------------------------------------------- aggiornamenti automatici
 # Il launcher passa il proprio percorso in WINOPTIMA_EXE: solo così l'app sa quale exe sostituire.
-# Si tengono al massimo 2 exe: quello attuale e «<nome>.old.exe» (la versione precedente, per tornare indietro).
+# Il vecchio exe viene rinominato «<nome>.old.exe» (è in esecuzione, non si può cancellare subito) e poi eliminato.
 $script:UpdateInfo = $null
 $script:UpdateReady = $null
 $script:Relaunching = $false
@@ -2448,7 +2448,8 @@ function Receive-UpdateReady {
     } -Sticky
 }
 
-# Sostituisce l'exe: quello attuale diventa .old.exe (rinominare un exe in esecuzione è consentito), il nuovo prende il suo posto
+# Sostituisce l'exe: quello attuale diventa .old.exe (rinominare un exe in esecuzione è consentito), il nuovo prende il suo posto;
+# il .old.exe si cancella appena il vecchio processo termina (qui sotto) o, al più tardi, al primo avvio del nuovo exe
 function Install-AppUpdate {
     param([switch]$Relaunch)
     $exe = $env:WINOPTIMA_EXE
@@ -2462,7 +2463,12 @@ function Install-AppUpdate {
         catch { Move-Item -LiteralPath $old -Destination $exe -Force; throw }
         Remove-Item -LiteralPath $new -Force -ErrorAction SilentlyContinue
         $script:UpdateReady = $null
-        Write-Log "WinOptima aggiornato alla versione $($script:UpdateInfo.Version). Versione precedente conservata in $old" 'SUCCESS'
+        Write-Log "WinOptima aggiornato alla versione $($script:UpdateInfo.Version). La versione precedente verrà eliminata." 'SUCCESS'
+        # Cancellazione differita: attende qualche secondo che il vecchio launcher termini, poi elimina il file
+        try {
+            Start-Process -FilePath "$env:WINDIR\System32\cmd.exe" -WindowStyle Hidden `
+                -ArgumentList ('/c ping -n 6 127.0.0.1 >nul & del /f /q "{0}"' -f $old)
+        } catch { <# ci pensa comunque il nuovo exe al primo avvio #> }
         if ($Relaunch) {
             $script:Relaunching = $true
             Start-Process -FilePath $exe
@@ -3594,7 +3600,7 @@ function Build-SettingsPage {
 
     [void]$panel.Children.Add((New-SectionHeader 'Aggiornamenti'))
     $row = New-Row -Icon 0xE895 -Title 'Aggiornamenti automatici' -Right $tpl `
-        -Desc "Versione installata: $script:AppVersion. All'avvio controlla le release su GitHub (contatta solo api.github.com), scarica e verifica la nuova versione e la installa alla chiusura. La precedente resta come «.old.exe»."
+        -Desc "Versione installata: $script:AppVersion. All'avvio controlla le release su GitHub (contatta solo api.github.com), scarica e verifica la nuova versione e la installa alla chiusura, eliminando la versione precedente."
     $tgl = $row.FindName('tgl'); $tgl.IsChecked = [bool]$script:Settings.autoUpdate
     $onUpd = { $script:Settings.autoUpdate = [bool]$args[0].IsChecked; Save-Settings }
     $tgl.Add_Checked($onUpd)

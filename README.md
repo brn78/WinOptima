@@ -16,6 +16,10 @@ Fai doppio clic su **`WinOptima.exe`**: chiede l'elevazione UAC, estrae il progr
 
 Per lo sviluppo si può anche avviare lo script direttamente (`WinOptima.bat` oppure `WinOptima.ps1`). Per provare l'app senza rischi: `powershell -ExecutionPolicy Bypass -File .\WinOptima.ps1 -Simulate` (non servono i privilegi di amministratore e **non viene modificato nulla**).
 
+## 🆕 Novità della versione 3.7.2
+* **Aggiornamento senza residui**: dopo l'aggiornamento la versione precedente (`WinOptima.old.exe`) viene eliminata da sola, appena possibile o al primo avvio della nuova versione. Accanto resta solo `WinOptima.exe`.
+* **Tutto schermo**: il contenuto occupa tutta la larghezza della finestra, allineato al titolo; nelle finestre strette i testi della barra dei comandi si accorciano senza sovrapporsi.
+
 ## 🆕 Novità della versione 3.7.1
 * **Rete → Nascondi l'avviso sui file .rdp non firmati**: niente più finestra «Attenzione: connessione remota sconosciuta» introdotta dall'aggiornamento di aprile 2026. Usa l'impostazione documentata `RedirectionWarningDialogVersion = 1`, più `RdpLaunchConsentAccepted = 1` per l'avviso del primo avvio. Da usare solo verso PC che conosci: l'avviso protegge dai file .rdp di phishing, e Microsoft potrebbe rimuovere questa opzione in futuro. In alternativa, firmando i file .rdp l'avviso sparisce senza disattivare la protezione.
 
@@ -41,7 +45,7 @@ Per lo sviluppo si può anche avviare lo script direttamente (`WinOptima.bat` op
 * **«Seleziona tutto» agisce solo sulla pagina visibile**: prima selezionava le voci di tutte le pagine (per esempio, dalla Pulizia attivava anche «Allinea la barra a sinistra»).
 
 ## 🆕 Novità della versione 3.2
-* **Aggiornamenti automatici**: all'avvio WinOptima controlla le release su GitHub. Se c'è una versione nuova la scarica, ne verifica integrità (dimensione e SHA-256) e la installa alla chiusura, oppure subito con *Riavvia e aggiorna*. La versione precedente resta accanto come `WinOptima.old.exe`, quindi al massimo 2 exe. Si può disattivare da *Impostazioni → Aggiornamenti*.
+* **Aggiornamenti automatici**: all'avvio WinOptima controlla le release su GitHub. Se c'è una versione nuova la scarica, ne verifica integrità (dimensione e SHA-256) e la installa alla chiusura, oppure subito con *Riavvia e aggiorna*. La versione precedente viene poi eliminata automaticamente. Si può disattivare da *Impostazioni → Aggiornamenti*.
 * **Si vede sempre cosa sta succedendo**: barra «in corso» con il passo attuale (es. *Passo 5 di 17: Attivo: Menu più reattivi*), percentuale nel titolo e avanzamento sull'icona della barra delle applicazioni.
 * **Registro attività ridimensionabile**: trascina la maniglia sul bordo superiore; l'altezza viene ricordata.
 * **Widget**: ora si nascondono tramite la policy ufficiale di Windows (la vecchia chiave è protetta dal driver UCPD e dava «operazione non autorizzata»).
